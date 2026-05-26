@@ -5,7 +5,8 @@ async function request(path, options = {}) {
     headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
   })
-  const data = await res.json()
+  // 204 No Content (e.g. DELETE) has no body — skip json() to avoid SyntaxError
+  const data = res.status === 204 ? null : await res.json()
   if (!res.ok) {
     const msg = data?.error?.message || `HTTP ${res.status}`
     throw Object.assign(new Error(msg), { code: data?.error?.code, status: res.status })

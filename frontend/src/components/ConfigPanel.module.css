@@ -42,6 +42,11 @@
   color: #94a3b8;
   cursor: pointer;
   line-height: 1;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .section {
@@ -113,6 +118,11 @@
   font-size: 1rem;
   cursor: pointer;
   padding: 0.1rem 0.3rem;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .addRuleBtn {
@@ -123,6 +133,11 @@
   padding: 0.25rem 0.6rem;
   cursor: pointer;
   font-size: 1rem;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .row {
@@ -148,6 +163,8 @@
 
 .cancelBtn {
   padding: 0.45rem 1.1rem;
+  min-height: 44px;
+  min-width: 44px;
   border: 1.5px solid #e2e8f0;
   border-radius: 6px;
   background: #fff;
@@ -157,6 +174,8 @@
 
 .saveBtn {
   padding: 0.45rem 1.25rem;
+  min-height: 44px;
+  min-width: 44px;
   border: none;
   border-radius: 6px;
   background: #3b82f6;

@@ -47,13 +47,14 @@ function AppInner() {
           <InputPanel
             onVoiceResult={(t) => setVoiceText(t)}
             voiceText={voiceText}
+            onTaskCreated={handleTaskCreated}
           />
           <VoiceButton onResult={(t) => setVoiceText(t)} />
         </div>
         <TaskListPanel />
       </main>
 
-      {showPipelineModal && (
+      {showPipelineModal && pendingTaskId && (
         <PipelineTriggerModal
           taskId={pendingTaskId}
           onClose={() => {

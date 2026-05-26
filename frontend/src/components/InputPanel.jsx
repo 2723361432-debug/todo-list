@@ -3,7 +3,7 @@ import { createTask } from '../services/api'
 import { useAppDispatch, useToast } from '../context/AppContext'
 import styles from './InputPanel.module.css'
 
-export function InputPanel({ onVoiceResult, voiceText }) {
+export function InputPanel({ onVoiceResult, voiceText, onTaskCreated }) {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
   const [shake, setShake] = useState(false)
@@ -30,6 +30,7 @@ export function InputPanel({ onVoiceResult, voiceText }) {
     try {
       const created = await createTask({ name: trimmed, title: trimmed })
       dispatch({ type: 'ADD_TASK', payload: created })
+      onTaskCreated?.(created)
       setText('')
       toast('任务已添加', 'success')
     } catch (e) {

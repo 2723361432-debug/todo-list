@@ -15,6 +15,7 @@ export function TaskItem({ task }) {
   const toast = useToast()
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState(task.name)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const inputRef = useRef(null)
 
   const handleToggle = async () => {
@@ -70,12 +71,14 @@ export function TaskItem({ task }) {
         title={task.priority}
       />
 
-      <input
-        type="checkbox"
-        className={styles.checkbox}
-        checked={task.status === 'done'}
-        onChange={handleToggle}
-      />
+      <label className={styles.checkboxWrapper}>
+        <input
+          type="checkbox"
+          className={styles.checkbox}
+          checked={task.status === 'done' || task.status === 'completed'}
+          onChange={handleToggle}
+        />
+      </label>
 
       <div className={styles.content}>
         {editing ? (
@@ -116,14 +119,34 @@ export function TaskItem({ task }) {
         </div>
       </div>
 
-      <button
-        className={styles.deleteBtn}
-        onClick={handleDelete}
-        aria-label="删除"
-        title="删除"
-      >
-        ×
-      </button>
+      {confirmDelete ? (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
+          <span style={{ fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>确认删除？</span>
+          <button
+            onClick={handleDelete}
+            aria-label="确认删除"
+            style={{ minHeight: '44px', padding: '4px 12px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+          >
+            确认
+          </button>
+          <button
+            onClick={() => setConfirmDelete(false)}
+            aria-label="取消删除"
+            style={{ minHeight: '44px', padding: '4px 12px', background: '#6c757d', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+          >
+            取消
+          </button>
+        </span>
+      ) : (
+        <button
+          className={styles.deleteBtn}
+          onClick={() => setConfirmDelete(true)}
+          aria-label="删除"
+          title="删除"
+        >
+          ×
+        </button>
+      )}
     </div>
   )
 }
