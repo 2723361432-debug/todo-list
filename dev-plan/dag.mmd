@@ -1,0 +1,97 @@
+flowchart TD
+  subgraph L0["L0 (1 tasks)"]
+    L0-001["L0-001<br/>仓库脚手架（Repo Scaffold）"]
+  end
+  subgraph L1["L1 (4 tasks)"]
+    L1-001["L1-001<br/>SQLite Schema & db.js 初始化器"]
+    L1-002["L1-002<br/>REST API 契约 + 类型定义"]
+    L1-003["L1-003<br/>Mock API Server"]
+    L1-004["L1-004<br/>AppContext Skeleton + Fetch Utilities"]
+  end
+  subgraph L2["L2 (11 tasks)"]
+    L2-001["L2-001<br/>Task Service & Routes（后端）"]
+    L2-002["L2-002<br/>Pipeline Config Service & Routes（后端）"]
+    L2-003["L2-003<br/>Pipeline Trigger & SSE Status Push（后端）"]
+    L2-004["L2-004<br/>Recommendation Service & Routes（后端）"]
+    L2-005["L2-005<br/>App Config Service & Routes（后端）"]
+    L2-006["L2-006<br/>TaskListPanel + TaskItem（前端 UI）"]
+    L2-007["L2-007<br/>InputPanel + VoiceButton + PipelineTrigger Modal（前端）"]
+    L2-008["L2-008<br/>usePipelineSSE Hook（前端）"]
+    L2-009["L2-009<br/>ConfigPanel（前端）"]
+    L2-010["L2-010<br/>RecommendationPanel（前端）"]
+    L2-011["L2-011<br/>App Shell & 全局 UX（前端）"]
+  end
+  subgraph L3["L3 (3 tasks)"]
+    L3-001["L3-001<br/>后端服务集成测试"]
+    L3-002["L3-002<br/>前后端 API 对接（替换 Mock）"]
+    L3-003["L3-003<br/>管线状态 SSE 端到端联调"]
+  end
+  subgraph L4["L4 (3 tasks)"]
+    L4-001["L4-001<br/>测试套件（后端单测 + 前端组件测）"]
+    L4-002["L4-002<br/>NFR 验证 & 安全检查"]
+    L4-003["L4-003<br/>README & 部署文档"]
+  end
+  L0-001 --> L1-001
+  L0-001 --> L1-002
+  L1-002 --> L1-003
+  L1-002 --> L1-004
+  L1-001 --> L2-001
+  L1-002 --> L2-001
+  L1-001 --> L2-002
+  L1-002 --> L2-002
+  L1-001 --> L2-003
+  L1-002 --> L2-003
+  L1-001 --> L2-004
+  L1-002 --> L2-004
+  L1-001 --> L2-005
+  L1-002 --> L2-005
+  L1-003 --> L2-006
+  L1-004 --> L2-006
+  L1-003 --> L2-007
+  L1-004 --> L2-007
+  L1-003 --> L2-008
+  L1-004 --> L2-008
+  L1-003 --> L2-009
+  L1-004 --> L2-009
+  L1-003 --> L2-010
+  L1-004 --> L2-010
+  L1-003 --> L2-011
+  L1-004 --> L2-011
+  L2-001 --> L3-001
+  L2-002 --> L3-001
+  L2-003 --> L3-001
+  L2-004 --> L3-001
+  L2-005 --> L3-001
+  L3-001 --> L3-002
+  L2-006 --> L3-002
+  L2-007 --> L3-002
+  L2-008 --> L3-002
+  L2-009 --> L3-002
+  L2-010 --> L3-002
+  L2-011 --> L3-002
+  L3-002 --> L3-003
+  L3-002 --> L4-001
+  L3-002 --> L4-002
+  L3-002 --> L4-003
+  style L0-001 fill:#94a3b8,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L1-001 fill:#f59e0b,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L1-002 fill:#f59e0b,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L1-003 fill:#f59e0b,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L1-004 fill:#f59e0b,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-001 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-002 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-003 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-004 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-005 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-006 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-007 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-008 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-009 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-010 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L2-011 fill:#3b82f6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L3-001 fill:#8b5cf6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L3-002 fill:#8b5cf6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L3-003 fill:#8b5cf6,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L4-001 fill:#10b981,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L4-002 fill:#10b981,color:#fff,stroke:#1e293b,stroke-width:1px
+  style L4-003 fill:#10b981,color:#fff,stroke:#1e293b,stroke-width:1px

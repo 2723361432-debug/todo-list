@@ -1,0 +1,1656 @@
+智能待办事项系统
+技术规格设计说明书
+Technical Specification Document
+编 制 单 位:云南数派数据科技有限公司
+二〇二六年五月
+
+# 1 引言
+
+
+## 1.1 编写目的
+
+本文件面向研发、测试与架构评审，把《产品需求文档 PRD-TDL-2026-002 V3.0》与《需求规格说明书 SRS-TDL-2026-002 V3.0》中已确认的功能需求与非功能需求，转译为可直接驱动编码的技术规格——覆盖系统架构、技术选型、业务流、数据流、接口契约六大设计视角。
+本版本（V3.0）在 V1.0 单 HTML 文件架构基础上，升级为 React 19 + Vite 8 前端 SPA + Node.js/Express 4 后端 REST API + SQLite 数据库的 B/S 三层全栈架构，同时以 Server-Sent Events（SSE）替代原短轮询方案。
+
+## 1.2 范围
+
+
+### 1.2.1 设计范围（IN SCOPE）
+
+前端：React 19 + Vite 8 SPA，CSS Modules，React Context API，Web Speech API 语音录入
+后端：Node.js 20 + Express 4 REST API，端口 3001，CORS 白名单，全局错误处理
+数据库：SQLite（better-sqlite3 12.x），WAL 模式，tasks / config / recommendations 三张表
+AI 集成：OpenAI-compatible Chat Completions API，拆解 / 路由 / 推荐三个用例
+管线集成：可选对接 πOS Task / Pipeline API（env 控制）；SSE 实时推送执行状态
+推荐系统：FrequencyAnalyzer，N-gram 词频 + AI 批量文案，90 天冷却 + 7 天抑制
+第一期：基础任务 CRUD、状态筛选、语音录入、AI 拆解、PipelineRouter 路由、SSE 推送
+第二期：管线配置页、πOS 状态同步、推荐卡、采纳/忽略反馈
+
+### 1.2.2 设计范围外（OUT OF SCOPE）
+
+用户账号与登录鉴权（采用 πOS Bearer Token 直接认证）
+多设备数据同步（SQLite 为单机本地库）
+Firefox 桌面端语音识别（Web Speech API 不支持）
+监控栈、CI/CD、容器化部署、容灾备份——属部署与运维范畴
+V2.5 / V3 演化路径
+
+### 1.2.3 阅读对象
+
+
+## 1.3 术语与实体英文名规范
+
+
+### 1.3.1 中英实体对照
+
+
+### 1.3.2 核心模块对照
+
+
+### 1.3.3 状态枚举
+
+
+### 1.3.4 动词区分
+
+录入 / 创建：建立 Task 实体（POST /api/tasks）
+拆解：AI 将自然语言切成多条 DecomposedTask（POST /api/ai/decompose）
+路由 / 分类：routerService 决定 Task 对应哪条 Pipeline（POST /api/ai/route）
+触发：向 πOS 发起 Execution（POST /api/pipelines/trigger）
+推送：SSE 向前端广播 Execution 状态变更事件
+分析：FrequencyAnalyzer 扫描历史任务输出推荐候选
+采纳 / 忽略：用户对推荐卡的两种处理
+
+### 1.3.5 错误码命名
+
+格式：TODO_E_\<DOMAIN\>_\<NNN\>，DOMAIN 取值：INPUT / DB / PIOS / AI / SPEECH / ROUTE / RECO。完整错误码表见 6.4 节。
+
+## 1.4 参考文档
+
+
+# 2 系统架构
+
+
+## 2.1 架构形态选择
+
+本节从四种典型架构形态出发，结合本项目的功能边界与非功能约束，论证 B/S 三层架构的选型合理性。
+
+### 候选方案对比
+
+V1 单 HTML 文件方案将 AI 密钥直接暴露于浏览器，且离线写队列机制脆弱；纯 SPA 方案虽简化部署，但同样无法保护服务端密钥；微服务在本阶段规模下引入过多运维负担。B/S 三层单体方案在安全性、持久化自主可控、实时推送原生支持三个维度上最契合本项目 MVP 目标，因此选定为 V2 架构基础。
+下图展示架构形态决策路径：
+图 1　架构形态决策树
+
+## 2.2 系统总览
+
+系统以浏览器为唯一客户端入口，前端 SPA 通过 HTTP/SSE 与后端 Express 服务通信，后端同时对接本地 SQLite 数据库、πOS 管线平台以及外部 AI 接口。下图描述系统边界与主要通信关系，不涉及部署拓扑。
+图 2　系统边界总览图
+前端与后端的唯一通信协议为 HTTP（REST + SSE），前端不直接访问数据库或外部服务。πOS 对接由环境变量 PIOS_API_BASE_URL 控制开关，未配置时全部流量在本地 SQLite 闭环。
+
+## 2.3 前后端分层架构
+
+
+### 后端四层结构
+
+后端严格遵循单向依赖原则：上层调下层，禁止反向引用。
+
+### 前端两层结构
+
+图 3　前后端分层依赖图
+单向依赖规则：Components 只通过 Context dispatch 触发状态变更，不直接调用 API；Services 层不引用 Routes 或 Controllers 的任何模块；External/DB 层对业务逻辑无感知。
+
+## 2.4 核心模块职责矩阵
+
+
+## 2.5 关键设计原则
+
+原则一：单向依赖，禁止跨层调用。 后端四层中每层只能调用紧邻下层；前端 Components 不直接发起 fetch，必须通过 AppContext 的 dispatch 或封装函数。此规则使各层可独立单测，替换下层实现时上层零改动。
+原则二：REST 接口作为前后端唯一契约。 前端不感知后端是否使用 SQLite 还是外部 πOS；后端不感知前端框架版本。双方以本文第 6 章接口规范为唯一对接边界，版本兼容通过响应字段向后兼容保证。
+原则三：SQLite 事务边界在 Service 层划定。 所有涉及多表写入（如批量创建任务后更新推荐状态）必须在 Services 层使用 db.transaction() 包裹，Controllers 层及以上不感知事务。better-sqlite3 同步 API 消除了回调/Promise 嵌套导致的事务泄漏风险。
+原则四：SSE 优于轮询。 V1 使用 setInterval 短轮询，存在 N 个客户端时产生 N 倍无效请求。V2 后端维护 SSE 连接池，管线状态变更时通过 EventEmitter 单次广播，客户端按需订阅，服务端推送开销与客户端数量线性但低于轮询。当 SSE 连接中断时，usePipelineSSE Hook 内置指数退避重连逻辑。该设计同时满足 SRS NFR-01 的 ≤60s 管线状态同步延迟要求：后端每 5s（默认值，可通过 config.pollingInterval 配置）向 πOS API 轮询一次管线执行状态，状态变更后通过 SSE 流立即推送前端（毫秒级），端到端延迟 ≈ 5s，远优于 SRS 基于双轮询（前端 30s + 后端 30s）所预估的 60s 最坏情况。
+原则五：React Context 状态作用域收敛于应用根节点。 本系统无路由分割，所有页面共享同一 AppContext。useReducer 替代 useState 的原因是任务列表、配置、推荐三类状态存在联动 action（如"AI 拆解完成后立即刷新任务列表"），reducer 模式使状态转移可预测、可追踪。
+原则六：πOS 对接以环境变量为特性开关。 PIOS_API_BASE_URL 未配置时，piosClient.js 所有方法返回本地 Mock 或直接操作 SQLite，确保系统在无网络环境下完整可用。此设计使 πOS 集成成为可插拔能力而非系统必需依赖。
+
+## 2.6 状态机与生命周期视图
+
+
+### 任务（Task）生命周期
+
+Task 持有两个独立状态字段：status（业务完成状态）与 pipelineStatus（管线执行状态）。两者正交，前者由用户操作驱动，后者由 SSE 推送驱动。
+图 4　Task 双状态生命周期
+
+### 推荐（Recommendation）生命周期
+
+图 5　Recommendation 状态机
+推荐的 suppressUntil 字段实现七天抑制机制：用户忽略某推荐后，系统在 7 天内不再展示同一 patternSignature 的推荐条目，到期后自动恢复为 pending 状态参与下一轮分析。
+
+## 2.7 关键演化接缝
+
+当前架构已在以下位置预留扩展缝隙，未来可在不重构整体结构的前提下局部替换：
+接缝 A：数据库层替换（SQLite → PostgreSQL）。 db.js 是整个系统唯一的数据库初始化点，better-sqlite3 的同步调用接口被封装在 Services 层内。若未来需要多进程部署或云数据库，只需将 db.js 替换为异步的 pg 客户端，并将 Services 层的同步调用改为 async/await，Routes 及 Controllers 层不感知此变更。
+接缝 B：实时推送升级（SSE → WebSocket）。 当前 SSE 为单向服务端推送。若未来需要双向实时协同，可在后端引入 ws 库替换 SSE 广播模块，前端 usePipelineSSE Hook 切换为 WebSocket 客户端，接口语义不变，AppContext 的 dispatch 逻辑无需改动。
+接缝 C：认证层注入（当前无鉴权）。 Express 中间件链在 cors 之后、路由之前预留了中间件插槽。未来可在此位置插入 JWT 验证中间件（如 express-jwt），无需修改任何 Controller 或 Service 代码。前端对应在 AppContext 的请求封装函数中统一附加 Authorization Header。
+接缝 D：AI 客户端多供应商切换。 aiClient.js 封装了 OpenAI-compatible 调用接口。若需切换至其他模型提供商，只需修改此单一文件中的 baseURL 与请求格式，aiService.js 调用的 chat() 方法签名保持不变。
+> HTTPS 强制要求（第一期生效）：iOS Safari 的 Web Speech API 需要安全上下文（Secure Context），系统须在 HTTPS 域名下部署。HTTP 环境下移动端语音录入功能完全不可用。可选方案：Nginx 反向代理 + SSL 证书、企业内网 HTTPS Web 服务器。第二期 πOS API 代理同样需要 HTTPS 环境。
+
+## 2.8 第一期 / 第二期功能矩阵
+
+
+# 3 技术选型
+
+本章对智能待办事项系统 V2.0 的全栈技术组合进行系统性说明，覆盖选型依据、评分模型、浏览器兼容、依赖许可与风险管控。所有技术均已在本项目代码库中实际落地，不含假设性规划。
+
+## 3.1 技术栈总表
+
+
+## 3.2 关键技术 5 轴评分
+
+评分轴说明：团队熟悉度（已有实战经验）、生态成熟度（社区/文档/周边工具）、隐性运维（上线后维护负担，5 = 负担最轻）、可替代性（被同类替换的难易度，5 = 最易替换）、与项目约束契合度（MVP、单机、B/S 全栈、开销最小化）。满分 25。
+> 说明：Web Speech API 因浏览器兼容性差异（Firefox 支持受限）导致团队熟悉度与生态成熟度评分偏低，但其零成本、零网络延迟的特性使契合度维持在 4 分。
+
+## 3.3 选型论证
+
+
+### 3.3.1 React 19 + Vite 8（前端框架 + 构建）
+
+选用：React 19 提供成熟 Hooks 生态与并发渲染基础；Vite 8 在开发模式下基于原生 ESM 实现毫秒级热更新，vite build 生产包可由 Express 直接静态托管。
+否决：Vue 3 生态同样成熟，但团队 React 积累更深；Angular 17 工程样板过重，不适合 MVP；原生 JS 在组件复用与状态同步上成本过高。
+代价：引入 JSX 编译与 node_modules 体积（约 40 MB），对比 V1 单文件无构建方案增加了构建链路复杂度。
+
+### 3.3.2 SQLite + better-sqlite3（数据持久化）
+
+选用：SQLite 无服务端进程，数据库即单文件（todo.db），与 Node.js 同进程；better-sqlite3 同步 API 与 Express 路由处理器风格一致，WAL 模式支持并发读写，可承载本项目的低并发单用户场景。
+否决：PostgreSQL 需要独立进程与连接池，运维成本超出 MVP 需要；MongoDB 文档模型对关系型任务数据优势不明显；JSON 文件方案无事务保障，并发写入存在数据损坏风险。
+代价：单文件不支持水平扩展；若未来需多用户并发或云端同步，需迁移至 PostgreSQL。
+
+### 3.3.3 Server-Sent Events（实时推送）
+
+选用：SSE 基于 HTTP 长连接，服务端单向推送管线执行状态（pipelineStatus）；浏览器 EventSource 原生支持自动重连；服务端仅需 res.write 与 res.setHeader，零额外依赖。
+否决：WebSocket 支持双向通信，但本场景仅需服务端推送，引入 ws 库属于过度设计；短轮询（setInterval）在 V1 已被验证会产生不必要的 DB 查询压力。
+代价：SSE 不支持二进制帧；HTTP/1.1 下浏览器同域连接数限制为 6，需注意多标签页场景下的连接竞争。
+
+### 3.3.4 React Context API + useReducer（状态管理）
+
+选用：Context API + useReducer 是 React 内置方案，无额外依赖；AppContext 承载全局任务列表、配置与推荐状态，在单页少路由场景下足够满足需求，调试路径清晰。
+否决：Redux Toolkit 样板代码多，对 MVP 规模项目收益低；Zustand 虽轻量但引入额外包与学习路径，增加不必要的依赖。
+代价：Context 频繁更新会导致全树重渲染，需配合 React.memo 或拆分 Context 缓解。
+
+### 3.3.5 CSS Modules（样式方案）
+
+选用：CSS Modules 由 Vite 原生支持（*.module.css），提供局部作用域，避免全局命名冲突；相比 V1 的全局 CSS 变量方案显著提升可维护性。
+否决：Tailwind CSS 需要扫描 class 名、配置 purge，工具链侵入性强；styled-components 运行时注入影响首屏性能。
+代价：组件与 CSS 文件一对一，在组件数量较多时目录层级增加；动态主题切换需额外手段（CSS 自定义变量）配合。
+
+### 3.3.6 Node.js 20 + Express 4（后端运行时与框架）
+
+选用：Node.js 20 LTS 稳定性与安全补丁保障充足；Express 4 中间件生态丰富，cors、express.json() 开箱即用；REST 路由层次（routes → controllers → services）与项目模块划分天然匹配。
+否决：Fastify 5 性能更高但 API 风格差异大；NestJS 10 依赖注入框架对 MVP 规模过度封装；Koa 2 缺乏内置中间件，手写量大。
+代价：Express 4 无内置类型系统与请求校验，需自行编写入参校验逻辑。
+
+### 3.3.7 OpenAI-compatible Chat Completions API（AI 对接）
+
+选用：aiClient.js 通过 AI_BASE_URL 与 AI_API_KEY 环境变量，可无缝切换 DeepSeek、Moonshot、GPT 等任意 OpenAI-compatible 服务商，具备最高供应商灵活性；无绑定 SDK，仅依赖原生 fetch。
+否决：固定绑定 OpenAI 官方 SDK 会引入与服务商紧耦合；自研协议适配层成本超出 MVP 预算。
+代价：不同提供商在 system_fingerprint、finish_reason 等字段上存在细微差异，需防御性解析响应体。
+
+### 3.3.8 Web Speech API（语音录入）
+
+选用：浏览器原生，零网络成本，无 API 调用费用；SpeechRecognition 接口提供实时转录流，适合单次任务录入场景。
+否决：OpenAI Whisper API 精度更高但每次录音需上传音频文件，引入额外网络延迟与 Token 费用。
+代价：Firefox 支持有限（需 media.webspeech.recognition.enable 手动开启）；移动端 Safari 支持度参差，离线场景不可用。
+
+### 3.3.9 原生 fetch() + AbortController（HTTP 客户端）
+
+选用：现代浏览器内置，零依赖；AbortController 与 AI 拆解请求的超时取消逻辑直接集成，代码路径清晰。
+否决：axios 1.x 提供拦截器与自动 JSON 序列化，但在本项目中这些能力均可用数行代码替代，引入 axios 属于过度依赖。
+代价：fetch 默认不抛出 HTTP 错误状态（4xx/5xx），需手动检查 response.ok，稍增加错误处理模板代码量。
+
+## 3.4 浏览器兼容性矩阵
+
+> 说明：△ 表示功能部分可用或需要额外配置；✗ 表示不支持。Web Speech API 的浏览器差异是本项目唯一需要前端降级处理的兼容性缺口，降级策略为隐藏语音按钮并提示用户切换 Chrome/Edge。
+
+## 3.5 第三方依赖与许可
+
+
+### 前端生产依赖
+
+> 前端无其他运行时依赖（路由库、状态库、HTTP 库均未引入）。Vite 8 及 ESLint 属于开发依赖，不进入生产包。
+
+### 后端生产依赖
+
+> 后端无 ORM、无消息队列、无日志框架等额外生产依赖。所有依赖均为 MIT 许可，可用于商业项目，无 GPL 传染风险。
+
+## 3.6 风险清单
+
+
+# 4 业务流设计
+
+
+## 4.1 业务流总览
+
+智能待办事项系统 V2.0 的核心交互围绕五条主要业务流构建。前端 React SPA 通过 REST API 与后端 Express 服务通信，后端持久化至本地 SQLite 数据库（WAL 模式，始终可写，无需离线队列），并通过 SSE 长连接将管线执行状态实时推送至前端。五条业务流如下表所示：
+
+## 4.2 BP-01 录入 → AI 拆解 → 任务创建 → 管线触发
+
+
+### 4.2.1 主流程
+
+用户通过 InputPanel 以文字输入、语音录制或剪贴板粘贴三种方式提交原始需求文本，前端防抖 300 ms 后向后端发起 AI 拆解请求，后端 aiService 调用 OpenAI-compatible Chat Completions API 将自然语言切分为结构化 DecomposedTask 数组并返回。前端弹出 TaskReviewModal 供用户确认、编辑或删减子任务，确认后批量调用 POST /api/tasks 逐条落库，最后调用 POST /api/pipelines/trigger 向 πOS 提交执行，触发成功后 SSE 广播初始状态。
+> 步骤顺序说明：①逐条 POST /api/tasks 创建任务（pipelineId=null）→ ②如用户选择关联管线，PATCH /api/tasks/:id 写入 pipelineId → ③ POST /api/pipelines/trigger {pipelineId} 触发执行 → ④返回的 executionId 通过 PATCH 写回对应任务
+图 6　图4-1 BP-01 录入→AI拆解→任务创建→管线触发主流程时序图
+
+### 4.2.2 异常分支
+
+AI 超时或请求失败：aiService 设置超时阈值（默认 30 秒）。超时或 HTTP 非 200 时，降级为按标点符号（句号、逗号、换行符）分割原始文本，每段生成一条 DecomposedTask，name 取原始文本段，priority 默认 medium，category 为空。降级结果与正常 AI 返回具有相同的 DecomposedTask[] 结构，TaskReviewModal 正常弹出，界面显示 Toast 提示"AI 拆解超时，已按标点分割"。
+批量创建局部失败：任务逐条 POST，若某条返回 4xx/5xx，前端跳过该条并记录失败数量，继续创建其余任务。全部请求完成后，Toast 汇总显示"成功创建 N 条，失败 M 条"。已成功入库的任务不受影响，失败的任务可由用户手动重试。
+管线触发失败：若 POST /api/pipelines/trigger 返回错误或 πOS 不可达（PIOS_API_BASE_URL 未配置），任务已正常写入 SQLite，pipelineStatus 字段保持 null。前端显示 Toast "任务已创建，管线触发失败，可稍后重试"，ConfigPanel 提供手动重触发入口。
+
+### 4.2.3 补偿流
+
+AI 降级路径返回与正常路径完全相同结构的 DecomposedTask[]，下游无需区分。管线触发失败时，SQLite 中任务记录已存在且 pipelineStatus=null，系统状态一致性由 SQLite 事务保证；用户可在任务详情中点击"重新触发"，再次调用 POST /api/pipelines/trigger，不会产生重复任务。SQLite 始终可写，无需离线队列，任何失败都不会丢失已录入的数据。
+
+## 4.3 BP-02 管线状态 SSE 推送 → 任务状态联动
+
+
+### 4.3.1 主流程
+
+后端 Express 挂载专用 SSE 端点 GET /api/pipeline/status-stream，响应头设置 Content-Type: text/event-stream。piosClient 以定期轮询方式（默认 5 秒）调用 GET /api/pipelines/:id/executions/:execId 获取最新执行状态，状态变更时通过 Node.js EventEmitter 广播，SSE 中间件将事件写入所有已连接的 EventSource 客户端。前端 usePipelineSSE Hook 在组件挂载时建立 EventSource 连接，收到消息后向 AppContext 派发 UPDATE_TASK_STATUS action，React 状态更新驱动 TaskItem 重新渲染；当管线状态变为 completed 时，前端同步将 Task.status 置为 completed。
+图 7　图4-2 BP-02 管线状态SSE推送→任务状态联动主流程时序图
+
+### 4.3.2 异常分支
+
+EventSource 断线重连：浏览器原生 EventSource 在连接断开后自动重连（默认退避约 3 秒），无需前端额外处理。重连后后端立即推送最新已知状态，确保前端状态最终一致。
+πOS 不可达：piosClient 轮询请求失败时，后端停止向 EventEmitter 广播新事件，已连接的 EventSource 不会收到新消息。前端 TaskItem 显示上次已知的 pipelineStatus，不会出现错误提示循环。若 piosClient 连续失败超过阈值（默认 3 次），后端记录日志并将该 executionId 的轮询暂停 60 秒，防止频繁无效请求。
+SSE 连接超时：部分反向代理或负载均衡会断开长连接，usePipelineSSE 监听 EventSource.onerror 事件，重新创建 EventSource 实例并恢复订阅，保证页面刷新内的持续监听。
+
+### 4.3.3 并发控制
+
+SSE 推送的 pipelineStatus 更新携带服务端 updatedAt 时间戳。AppContext reducer 在处理 UPDATE_TASK_STATUS 前比较 payload.updatedAt 与 store 中该任务现有 updatedAt：若 payload.updatedAt ≤ 现有值，则丢弃本次更新，防止乱序消息或用户手动修改状态（本地 updatedAt 更新）被 SSE 旧消息覆盖。
+
+## 4.4 BP-03 高频任务分析 → 推荐生成 → 采纳/忽略
+
+
+### 4.4.1 主流程
+
+用户在 ConfigPanel 点击"立即分析"或系统定时触发，前端调用 POST /api/ai/analyze。后端 recommendationService 首先查询 SQLite tasks 表，按 category/keyword 统计频率，过滤出出现次数超过阈值（默认 3 次）且尚无对应管线的模式；将符合条件的高频模式批量送入 AI 接口生成推荐内容（suggestedPipelineName、suggestedKeywords、reason）；结果写入 recommendations 表，状态设为 pending，同时更新 config 中的 analyzerLastRunAt。前端 RecommendationPanel 轮询 GET /api/config/recommendations 展示待处理推荐卡，用户可采纳（accept）或忽略（dismiss）。
+图 8　图4-3 BP-03 高频任务分析→推荐生成→采纳/忽略主流程时序图
+> 采纳操作语义说明：采纳操作（status=accepted）仅将 Recommendation 状态更新为 accepted，并将 suggestedKeywords 作为 keywordRule 关联至已存在的管线（通过 suggestedPipelineId 匹配）；不自动创建新管线——用户须在 ConfigPanel 手动创建管线后再关联。若 suggestedPipelineId 对应的管线尚不存在，keywordRule 将写入 orphan 状态，等待用户在 ConfigPanel 手动完成管线创建与绑定。
+
+### 4.4.2 异常分支
+
+AI 分析请求失败：aiService 调用 OpenAI 接口失败（超时或非 200）时，recommendationService 不向 recommendations 表写入任何记录，但仍将 analyzerLastRunAt 更新为当前时间，避免短期内重复触发高代价分析。后端向前端返回 200 并附带 {count: 0, error: 'ai_failure'}，Toast 显示"分析完成，AI 推荐暂时不可用"。
+频率门控无结果：若 tasks 表中所有模式均未达到阈值，recommendationService 直接跳过 AI 调用，返回 {count: 0}，不产生无效推荐。
+采纳时 keywordRule 写入失败：PATCH 操作中，recommendations 状态更新与 keywordRule 写入在同一 SQLite 事务内执行，任一步失败则整体回滚，推荐状态维持 pending，前端 Toast 显示"采纳失败，请重试"。
+
+### 4.4.3 补偿流
+
+忽略操作设置 suppressUntil 字段（当前时间戳 + 7 天毫秒数），下次分析时 recommendationService 跳过 suppressUntil > NOW 的 patternSignature，避免对用户已明确拒绝的模式重复推荐。analyzerLastRunAt 无论 AI 是否成功均会更新，保证分析节奏稳定。
+
+### 4.4.4 验收矩阵
+
+
+## 4.5 BP-04 管线创建 → 关键词规则绑定
+
+
+### 4.5.1 主流程
+
+用户在 ConfigPanel 的管线配置区域填写管线名称与关键词规则，点击"创建管线"。前端调用 POST /api/pipelines，后端 pipelineController 调用 piosClient.createPipeline() 向 πOS 提交创建请求；πOS 返回新管线的 pipelineId。创建成功后，后端立即在同一请求处理链中调用 PATCH /api/config，将用户指定的触发关键词写入 Config.keywordRules，关联新创建的 pipelineId。前端收到 201 响应后刷新 ConfigPanel 管线列表，新管线与关键词规则即时生效，后续任务录入时 AI 路由模块将参照此规则匹配。
+
+### 4.5.2 原子性保障与回滚
+
+管线创建与关键词规则绑定不在同一服务实体（πOS 为外部系统），无法通过单一数据库事务保证原子性，采用以下顺序补偿策略：
+调用 piosClient.createPipeline()，失败则直接返回 500，不写入 config，ConfigPanel 提示"管线创建失败"。
+piosClient 成功返回 pipelineId 后，调用 configService 在 SQLite 事务内写入 keywordRules。若此步失败，后端记录 {pipelineId, pendingKeywords} 至 config 中的 orphanPipelines 列表，并返回 207 Partial Success。前端 Toast 显示"管线已创建，关键词绑定失败，请在配置页手动绑定"，ConfigPanel 加载时检测 orphanPipelines 列表并高亮提示未绑定的管线。
+
+### 4.5.3 异常分支
+
+πOS 不可达：PIOS_API_BASE_URL 未配置或请求失败，后端降级创建一条本地占位管线记录（仅写入 SQLite config，pipelineId 生成本地 UUID，标注 localOnly=true），关键词规则正常绑定至本地管线。待 πOS 恢复后，用户可在 ConfigPanel 手动同步本地管线至 πOS。
+关键词规则冲突：若提交的 keywords 与已存在 keywordRule 重复，configService 合并规则（同一 keyword 指向最新 pipelineId），不报错，返回合并后的完整规则集。
+
+## 4.6 BP-05 基础 CRUD（内联编辑 / 删除 / 筛选）
+
+
+### 4.6.1 主流程
+
+TaskListPanel 在页面初始化时调用 GET /api/tasks 获取全量任务列表，后端从 SQLite 查询并按 createdAt DESC 排序返回。前端将任务列表存储于 AppContext state，所有后续操作以乐观 UI 模式进行：前端先更新本地 state，再将变更异步提交后端，失败时回滚。
+内联编辑：用户双击 TaskItem 进入编辑模式，修改 name/priority/category/dueAt 等字段后失焦保存。前端先更新 AppContext 中该任务对象，再发送 PATCH /api/tasks/:id；后端 taskService 以 SQLite 事务更新对应行，同时刷新 updatedAt 字段；返回 200 后前端以服务端返回值替换本地乐观副本，保证 updatedAt 同步。若 PATCH 失败，前端回滚至编辑前值并显示 Toast 错误。
+删除：用户点击 TaskItem 删除按钮，弹出确认对话框；确认后前端从 AppContext 列表中移除该项（乐观），发送 DELETE /api/tasks/:id；后端执行 SQLite DELETE，返回 204；若失败，前端重新插回列表并 Toast 提示。
+筛选/排序：TaskListPanel 提供状态（pending/completed）、优先级（low/medium/high）、分类筛选及按 createdAt/dueAt/priority 排序。筛选与排序均为前端纯内存操作，基于 AppContext 中已加载的任务列表，不触发新的 API 请求，保证交互无感延迟。
+
+### 4.6.2 SQLite 作为唯一真值源
+
+V2.0 移除了 V1 中的 localStorage 持久化和离线队列（todo_task_queue）。所有任务数据以 SQLite 为唯一真值源，页面刷新后通过 GET /api/tasks 重新加载，保证多标签页状态一致。better-sqlite3 同步 API 在 WAL 模式下写入延迟极低（通常 < 1 ms），乐观 UI 的回滚概率极小。
+
+## 4.7 失败原型识别表
+
+以下四类失败原型覆盖本系统各 BP 的主要故障模式，研发与测试可据此设计错误注入用例：
+
+# 5 数据流设计
+
+
+## 5.1 四段管道总图
+
+系统数据流以"来源 → 变换 → 落地 → 出口"四段管道为骨架，覆盖用户录入、AI 推理、管线状态同步、配置读写四条主干链路。所有持久化操作均以 SQLite 为唯一后端存储，前端以 React Context（AppContext + useReducer）维护内存态视图。
+图 9　图5-1 四段管道数据流总图
+四段含义说明：
+来源：用户交互事件（文字/语音/粘贴）、外部 AI 接口、πOS 执行状态接口、ConfigPanel 表单提交，是所有数据的原始入口。
+变换：Express 路由层完成请求合法性校验，Service 层负责字段映射、AI 响应解析、N-gram 频率分析等业务逻辑，不直接操作数据库。
+落地：所有持久化写入均落入 SQLite 三张表；better-sqlite3 同步 API 保证调用栈简洁、无回调嵌套。
+出口：后端通过 REST 响应和 SSE 流将数据推送至前端；前端 dispatch 到 AppContext，驱动对应组件重渲染。
+
+## 5.2 数据链路详解
+
+
+### DL-01 用户录入 → SQLite 持久化
+
+链路路径
+InputPanel（form / voice / paste）
+  → POST /api/tasks（JSON body）
+    → Express 校验（name 非空、枚举字段合法）
+      → taskService.create()（生成 id、createdAt、updatedAt）
+        → SQLite INSERT INTO tasks
+          → 201 响应（完整 Task 对象）
+            → AppContext dispatch ADD_TASK
+              → TaskListPanel 重渲染
+字段映射表
+PATCH 请求的字段更新规则相同，updatedAt 由后端强制覆写为当前毫秒时间戳，防止客户端伪造。
+
+### DL-02 AI 拆解链路
+
+链路路径
+InputPanel 用户输入文本
+  → POST /api/ai/decompose（body: { text }）
+    → aiService.decompose()
+      → 截断至 4000 字符（防止 token 溢出）
+        → OpenAI Chat Completions API（temperature=0.4）
+          → 响应 JSON 解析 → DecomposedTask[]
+            → TaskReviewModal 展示确认
+              → 用户批量确认
+                → 逐条调用 DL-01 写入路径
+AI 请求构造
+系统提示（system prompt）约定返回格式为 JSON 数组，每项包含 name、priority、category、timeLabel 字段。
+用户消息（user message）为截断后的原始输入文本（上限 4000 字符）。
+temperature=0.4：保持语义忠实，允许适度补全任务名称。
+解析容错（降级策略）
+JSON 解析失败时，aiService 执行标点分割降级：
+原始文本 → 按"。！？；\n"分割 → 过滤空字符串
+  → 每段作为独立 Task.name
+    → source 标记为 "ai"
+降级结果同样推入 TaskReviewModal，用户仍可在确认前手动编辑。
+
+### DL-03 管线状态同步链路（SSE）
+
+链路路径
+后端定时轮询（setInterval）
+  → piosClient.getExecutionStatus(pipelineId, executionId)
+    → πOS Execution API 响应
+      → 比对本地 tasks.pipelineStatus
+        → 若状态变更 → EventEmitter.emit('pipeline-status-update', payload)
+          → SSE 处理器 res.write(...)
+            → 前端 EventSource onmessage
+              → usePipelineSSE hook 解析 data
+                → AppContext dispatch UPDATE_TASK_PIPELINE_STATUS
+                  → TaskItem 状态徽章重渲染
+SSE 事件格式
+每条事件遵循 W3C Server-Sent Events 规范，单个数据帧格式如下：
+data: {"taskId":"uuid-xxxx","pipelineStatus":"running"}\n\n
+data: 字段为 JSON 字符串，两个换行符 \n\n 标识事件边界。
+pipelineStatus 取值范围：triggered / running / completed / failed（含义见附录 B 状态机）。
+响应头固定为 Content-Type: text/event-stream，Cache-Control: no-cache，Connection: keep-alive。
+客户端订阅生命周期
+usePipelineSSE hook 在组件挂载时创建 new EventSource('/api/pipeline/status-stream')，在卸载时调用 eventSource.close()，避免内存泄漏。πOS 未配置（PIOS_API_BASE_URL 为空）时，后端仍保持 SSE 连接但不发送任何事件，前端保持空闲等待而不报错。
+
+### DL-04 频率分析 → 推荐链路
+
+链路路径
+POST /api/ai/analyze（手动触发或 ConfigPanel 定时触发）
+  → recommendationService.analyze()
+    → SQLite SELECT tasks WHERE createdAt > NOW()-90天
+      → tokenize（分词） + N-gram（2-gram、3-gram）统计词频
+        → 过滤规则：
+            90 天内已有同签名推荐 → 跳过
+            suppressUntil > NOW() → 跳过（7 天抑制期）
+          → 候选模式列表
+            → OpenAI batch 请求（temperature=0）生成推荐理由
+              → SQLite INSERT INTO recommendations
+                → GET /api/config/recommendations
+                  → RecommendationPanel 展示推荐卡
+分析参数
+分析窗口：90 天内的历史任务（analyzerWindowDays = 90，可在 ConfigPanel 调整）。
+最低频次阈值：同模式出现 ≥ 3 次方进入候选（analyzerFrequencyThreshold = 3，可配置）。
+AI 请求 temperature=0：推荐理由需要确定性输出，避免语义漂移。
+patternSignature 由 N-gram 排序后的关键词拼接而成，用于去重判断。
+suggestedKeywords 以 JSON 字符串形式存储（如 '["汇报","周报"]'），读取时由 Service 层解析为数组再返回前端。
+用户操作回写
+用户在 RecommendationPanel 点击"采纳"或"忽略"后，前端调用 PATCH /api/config/recommendations/:id，后端更新 recommendations.status 并在忽略时将 suppressUntil 设为 Date.now() + 7*24*3600*1000。
+N-gram 分词规则：tokenize 按空格与标点（。！？；—）分割任务名称，保留长度≥2的词；生成2-gram与3-gram（示例："完成技术文档"→tokens=["完成","技术","文档"]，2-gram=["完成技术","技术文档"]，3-gram=["完成技术文档"]）；frequency[ngram]≥analyzerFrequencyThreshold（默认3）进入候选；patternSignature = 候选 ngram 排序后按"|"拼接，用于去重。
+
+### DL-05 配置读写链路
+
+链路路径
+ConfigPanel 表单提交
+  → PATCH /api/config（body: { aiApiKey, aiBaseUrl, piosToken, ... }）
+    → configService.updateConfig()
+      → db.transaction()：逐键 SQLite UPSERT config 表
+        → 写入完成后 sync process.env（aiApiKey → OPENAI_API_KEY 等）
+          → configService.getSafeConfig()
+              → 脱敏：omit aiApiKey，add hasApiKey: boolean
+                → 200 响应脱敏配置对象
+                  → ConfigPanel 回显（不展示明文密钥）
+安全脱敏规则
+aiApiKey 仅写入 SQLite，响应体中以 hasApiKey: true/false 替代；前端只展示"已配置"状态，不回显明文。
+piosToken 同理，响应体字段名为 hasPiosToken。
+GET /api/config 同样经过 getSafeConfig() 脱敏，保证任何读取路径均不泄露密钥。
+
+## 5.3 实体字段表
+
+
+### Task 字段表
+
+
+### Config 字段表
+
+
+### Recommendation 字段表
+
+
+## 5.4 SQLite 事务边界
+
+better-sqlite3 的同步 API 支持显式事务包裹（db.transaction(fn)(args)），系统在以下场景中明确界定事务边界：
+WAL 模式优势：系统初始化时执行 PRAGMA journal_mode = WAL，WAL 模式下多个读事务可与写事务并发进行，互不阻塞。对于前端并发调用 GET /api/tasks 与后台 SSE 状态写入的场景，WAL 模式避免了读写互斥导致的接口延迟。
+并发写入处理：WAL 模式下写入仍需顺序化，多个并发请求可能触发 SQLITE_BUSY。db.js 初始化时设置 db.pragma('busy_timeout = 5000')，自动重试最多 5 秒；超时后返回 503，前端乐观 UI 回滚。单用户场景下此场景极少发生。
+
+## 5.5 数据精度与边界风险
+
+
+# 6 后端接口设计
+
+
+## 6.1 接口风格约定
+
+
+### 6.1.1 URL 命名规则
+
+所有内部接口均以 /api/ 为前缀，资源名称使用复数小写名词（tasks、pipelines、config），AI 功能集中在 /api/ai/ 命名空间下，管线实时流单独挂载于 /api/pipeline/status-stream（单数，区别于管线资源集合）。路径参数采用驼峰命名（:id、:pipelineId、:executionId）。
+
+### 6.1.2 HTTP 方法语义
+
+系统不使用 PUT（整体替换），所有更新均通过 PATCH 发送差量字段。
+
+### 6.1.3 统一响应格式
+
+成功响应：Content-Type: application/json，正文为资源对象或资源数组。
+错误信封：
+[json]
+{
+  "error": {
+    "code": "TODO_E_INPUT_001",
+    "message": "字段 name 不能为空"
+  }
+}
+所有错误均使用此二层结构，code 为机器可读标识符，message 为可读描述。
+
+### 6.1.4 标准 HTTP 状态码
+
+
+### 6.1.5 局部更新（PATCH）约定
+
+PATCH 请求体只包含需要修改的字段，后端忽略未传字段（保留原值）。不可修改字段（id、createdAt）即使出现在请求体中也被静默忽略。后端在每次 PATCH 成功后自动将 updatedAt 设置为当前 Unix 毫秒时间戳。
+
+### 6.1.6 分页
+
+当前版本面向单用户本地场景，任务上限设计为 500 条以内，SQLite 单次全量查询即可满足性能要求，GET /api/tasks 不支持分页参数。
+
+## 6.2 接口总览表
+
+
+## 6.3 核心接口契约
+
+
+### 6.3.1 GET /api/tasks
+
+用途：获取数据库中全部任务，前端任务列表初始化及刷新均调用此接口。
+请求参数：无（无分页、无过滤参数，过滤/排序由前端 React 状态层完成）。
+响应体示例：
+[json]
+[
+  {
+    "id": "task_1716962400000_a1b2c3d4",
+    "name": "完成技术文档初稿",
+    "status": "pending",
+    "priority": "high",
+    "category": "工作",
+    "timeLabel": "今天下午",
+    "dueAt": 1716984000000,
+    "source": "voice",
+    "pipelineId": "pipe_doc_review",
+    "executionId": null,
+    "pipelineStatus": null,
+    "completedAt": null,
+    "createdAt": 1716962400000,
+    "updatedAt": null
+  }
+]
+失败处理：正常情况下不会返回 4xx；SQLite 读取异常返回 500 + INTERNAL_ERROR。
+特殊说明：当环境变量 PIOS_API_BASE_URL 已配置时，taskService 将委托 piosClient 调用 πOS Task API（GET /api/v1/tasks），返回结构保持相同形态。结果按 createdAt 降序排列（新任务在前）。
+
+### 6.3.2 POST /api/tasks
+
+用途：创建单条任务。任务确认弹窗（TaskReviewModal）批量创建时每条均独立调用此接口。
+请求参数（Body）：
+响应体示例：
+[json]
+{
+  "id": "task_1716962400000_a1b2c3d4",
+  "name": "完成技术文档初稿",
+  "status": "pending",
+  "priority": "high",
+  "category": "工作",
+  "timeLabel": "今天下午",
+  "dueAt": 1716984000000,
+  "source": "ai",
+  "pipelineId": null,
+  "executionId": null,
+  "pipelineStatus": null,
+  "completedAt": null,
+  "createdAt": 1716962400000,
+  "updatedAt": null
+}
+失败处理：
+name 缺失或为空字符串 → 400 + TODO_E_INPUT_001
+SQLite 写入异常 → 500 + INTERNAL_ERROR
+特殊说明（幂等性）：若请求体提供 id 字段，后端以该值作为主键插入。调用方可在网络重试时携带相同 id，SQLite PRIMARY KEY 约束将拒绝重复插入（抛出 UNIQUE 冲突异常，服务层捕获后应返回 409 或直接返回已有记录）。后端自动生成 id 格式为 task_<Date.now()>_<uuid前8位>，createdAt 设置为服务器当前 Unix 毫秒，status 固定为 "pending"。
+
+### 6.3.3 PATCH /api/tasks/:id
+
+用途：更新任务的单个或多个字段。前端任务勾选、内联编辑、管线状态回写均使用此接口。
+路径参数：
+请求参数（Body，所有字段可选）：
+后端白名单过滤，仅允许上述字段更新；id、createdAt 即使出现在请求体中也被忽略。updatedAt 由后端自动设置为当前时间。
+响应体示例：
+[json]
+{
+  "id": "task_1716962400000_a1b2c3d4",
+  "name": "完成技术文档初稿",
+  "status": "completed",
+  "priority": "high",
+  "category": "工作",
+  "timeLabel": "今天下午",
+  "dueAt": 1716984000000,
+  "source": "ai",
+  "pipelineId": "pipe_doc_review",
+  "executionId": "exec_20260526_001",
+  "pipelineStatus": "completed",
+  "completedAt": 1716990000000,
+  "createdAt": 1716962400000,
+  "updatedAt": 1716990000000
+}
+失败处理：
+任务不存在 → 404 + TODO_E_DB_001
+patch 对象不含任何可更新字段 → 200，返回原始任务（无操作）
+特殊说明（并发控制）：系统采用最后写入胜出（last-write-wins）策略。若 PATCH 请求体中 updatedAt 值小于数据库中现有 updatedAt，后端仍接受更新并记录警告日志（[WARN] stale update on task <id>）。当前单用户场景不会引发实际冲突，此日志仅用于调试。
+
+### 6.3.4 DELETE /api/tasks/:id
+
+用途：永久删除任务，操作不可逆。
+路径参数：
+响应：204 No Content，响应体为空。
+失败处理：
+任务不存在 → 404 + TODO_E_DB_001
+SQLite 删除异常 → 500 + INTERNAL_ERROR
+特殊说明：幂等性——若对同一 id 发起两次 DELETE，第一次返回 204，第二次返回 404。
+
+### 6.3.5 POST /api/ai/decompose
+
+用途：将用户输入的自然语言文本拆解为多条结构化任务候选项，供 TaskReviewModal 展示确认。
+请求参数（Body）：
+响应体示例（AI 可用时）：
+[json]
+{
+  "tasks": [
+    {
+      "text": "明天下午3点开技术评审会",
+      "correctedText": "明天下午3点开技术评审会",
+      "priority": "high",
+      "category": "工作",
+      "timeLabel": "明天下午3点",
+      "dueAt": 1716962400000
+    },
+    {
+      "text": "准备评审PPT",
+      "correctedText": "准备评审 PPT",
+      "priority": "medium",
+      "category": "工作"
+    }
+  ],
+  "isFallback": false
+}
+响应体示例（降级模式，isFallback=true）：
+[json]
+{
+  "tasks": [
+    {
+      "text": "明天下午3点开技术评审会",
+      "correctedText": "明天下午3点开技术评审会",
+      "priority": "medium",
+      "category": "其他"
+    }
+  ],
+  "isFallback": true
+}
+DecomposedTask 字段说明：
+失败处理：
+input 缺失或空字符串 → 400 + TODO_E_INPUT_001
+AI 接口未配置 → 降级：返回 200 + { tasks: [...], isFallback: true }，按标点/换行分割文本
+AI 请求超时（30 s AbortController） → 降级：返回 200 + { tasks: [...], isFallback: true }，不返回 503
+AI 响应 JSON 解析失败 → 降级：返回 200 + { tasks: [...], isFallback: true }
+特殊说明：此接口永远不返回 5xx——AI 任何异常均触发降级（fallbackSplit），确保前端始终能继续操作。降级时 isFallback=true 供前端提示用户。AI 调用温度参数：temperature=0.4。
+
+### 6.3.6 POST /api/ai/route
+
+用途：为给定任务名称执行三阶段管线路由，返回匹配的 pipelineId。
+请求参数（Body）：
+三阶段路由逻辑：
+关键词匹配：遍历 config.keywordRules（按 priority 降序），大小写不敏感子串匹配，首次命中即返回对应 pipelineId。
+AI 分类（仅当 AI_API_KEY 已配置）：将所有 keywordRules 中的 pipelineId 及 defaultPipelineId 作为候选集合，调用 AI（temperature=0）选择最优 pipelineId。
+默认兜底：返回 config.defaultPipelineId，若未配置则返回 null。
+响应体示例：
+[json]
+{ "pipelineId": "pipe_doc_review" }
+[json]
+{ "pipelineId": null }
+失败处理：
+taskName 缺失或空字符串 → 400 + TODO_E_INPUT_001
+三阶段均无匹配 → 200，pipelineId: null（不报错，参见 TODO_E_ROUTE_001）
+AI 阶段异常 → 跳过 AI，直接进入第三阶段兜底
+特殊说明：路由无匹配是预期业务结果，不视为错误，返回 200 + null。
+
+### 6.3.7 POST /api/ai/analyze
+
+用途：触发高频任务频率分析，若发现新的高频模式则调用 AI 生成推荐，写入 SQLite recommendations 表并返回。
+请求参数：无请求体。
+响应体示例（有新推荐时）：
+[json]
+{
+  "recommendations": [
+    {
+      "id": "rec_1716990000000_0",
+      "patternSignature": "技术文档",
+      "suggestedPipelineName": "文档处理管线",
+      "suggestedKeywords": ["文档", "技术文档"],
+      "reason": "过去7天内「技术文档」相关任务出现6次，建议配置专属管线",
+      "status": "pending",
+      "suppressUntil": null,
+      "sourcePattern": "技术文档",
+      "createdAt": 1716990000000,
+      "updatedAt": null
+    }
+  ]
+}
+响应体示例（被节流或无新模式时）：
+[json]
+{ "recommendations": [] }
+失败处理：
+距上次运行未满 analyzerThrottleMs（默认 3 600 000 ms = 1 h） → 200 + 空数组（节流，参见 TODO_E_RECO_001）
+无高频模式 → 200 + 空数组
+AI 调用失败 → 200 + 空数组（graceful degradation，不报错）
+特殊说明：分析流程遵循三步门控——①本地节流检查；②本地频率统计（N-gram，无 AI）；③仅当有高频模式时才调用 AI 生成推荐文案。节流由 config.analyzerLastRunAt + config.analyzerThrottleMs 共同控制，运行成功后后端自动更新 analyzerLastRunAt。
+
+### 6.3.8 GET /api/pipeline/status-stream
+
+用途：长连接 SSE 端点，前端 usePipelineSSE Hook 通过 EventSource 订阅，获取待处理任务列表的实时推送。
+响应头：
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+SSE 事件格式（数据推送）：
+data: {"tasks":[{"id":"task_xxx","name":"完成文档","status":"pending","pipelineStatus":"running","executionId":"exec_001","updatedAt":1716990000000}],"timestamp":1716990000000}
+心跳帧格式（每 30 s 发送，防止代理超时）：
+: heartbeat
+连接生命周期：
+连接建立时立即发送一次当前待处理任务快照。
+此后每 5 s 轮询 SQLite，推送 status='pending' 或 status='running' 的任务列表。
+客户端断开（req 触发 close 事件）→ 服务端清除 setInterval，调用 res.end()。
+计时器说明（两个独立计时器）：
+数据推送计时器：每 5 秒（pollingInterval）查询 πOS/SQLite 执行状态，若有变更立即推送 SSE 数据帧；无变更则本周期内不发送任何帧（避免冗余数据）。
+心跳计时器：独立于数据推送计时器，连续 30 秒无数据帧推送时发送 : heartbeat\n\n，防止反向代理因连接空闲断开 TCP；有数据帧推送时心跳计时器重置。
+SSE 推送时机：
+轮询检测到状态变更 → 立即推送 SSE 数据帧，不等待下一个 5 秒轮询周期。
+轮询周期内无状态变更 → 不发送空帧，避免冗余数据传输。
+客户端重连：浏览器 EventSource 在连接断开后自动携带 Last-Event-ID 重连，服务端无需实现事件持久化（当前实现不使用 id: 字段）。
+πOS 执行状态别名映射：
+轮询 GET /api/pipelines/:id/executions/:execId 时，πOS 可能返回多种状态字符串别名，系统统一按以下规则映射后写入 Task.pipelineStatus：
+失败处理：若 SQLite 查询异常，将错误信息封装在 data 中推送（{ error: "...", timestamp: ... }），连接不中断。
+
+### 6.3.9 POST /api/pipelines/trigger
+
+用途：触发指定管线的一次执行，调用 πOS Pipeline API 并返回执行实例 ID。
+请求参数（Body）：
+响应体示例：
+[json]
+{ "executionId": "exec_20260526_8a3f2b1c" }
+失败处理：
+pipelineId 缺失 → 400 + TODO_E_INPUT_001
+πOS 未配置（PIOS_API_BASE_URL 未设置） → 503 + TODO_E_PIOS_001
+πOS 返回 401 → 503 + TODO_E_PIOS_003
+πOS 返回 5xx → 503 + TODO_E_PIOS_002（含 2 次重试，1 s 退避）
+特殊说明：触发成功后，前端通常随即调用 PATCH /api/tasks/:id 将任务的 pipelineStatus 更新为 "triggered"，executionId 写入返回值。后续通过 SSE 或主动查询 GET /api/pipelines/:id/executions/:execId 跟踪状态变化。
+
+### 6.3.10 GET /api/config
+
+用途：获取系统配置，用于 ConfigPanel 初始化展示。
+响应体示例：
+[json]
+{
+  "defaultPipelineId": "pipe_default",
+  "keywordRules": [
+    { "keyword": "文档", "pipelineId": "pipe_doc_review", "priority": 10 }
+  ],
+  "pollingInterval": 5000,
+  "analyzerWindowDays": 7,
+  "analyzerFrequencyThreshold": 5,
+  "analyzerThrottleMs": 3600000,
+  "analyzerLastRunAt": 1716900000000,
+  "aiApiBaseUrl": "https://api.openai.com/v1",
+  "aiModel": "gpt-4o-mini",
+  "piosApiBaseUrl": "https://pios.example.com",
+  "hasApiKey": true,
+  "hasPiosToken": true
+}
+特殊说明（安全脱敏）：响应体中不含 aiApiKey 和 piosApiToken 的明文值，仅以布尔字段 hasApiKey 和 hasPiosToken 表示是否已配置。前端凭此判断是否显示"已配置"状态标识，无法从此接口还原密钥内容。
+
+### 6.3.11 PATCH /api/config
+
+用途：更新系统配置，支持任意字段的局部更新，包括密钥写入。
+请求参数（Body，所有字段可选）：任意 AppConfig 字段，例如：
+[json]
+{
+  "aiApiKey": "sk-xxxxxxxxxxxx",
+  "aiApiBaseUrl": "https://api.openai.com/v1",
+  "aiModel": "gpt-4o",
+  "analyzerThrottleMs": 7200000
+}
+响应体：同 GET /api/config 的安全配置格式（已脱敏）。
+特殊说明：写入 aiApiKey / piosApiToken 后，服务端同步更新对应环境变量（process.env.AI_API_KEY 等），确保同一进程内后续 AI/πOS 调用立即生效，无需重启。配置以键值对形式存储于 SQLite config 表，通过 UPSERT 原子写入。
+
+### 6.3.12 GET /api/config/recommendations
+
+用途：获取所有推荐记录，供 RecommendationPanel 展示。
+响应体示例：
+[json]
+[
+  {
+    "id": "rec_1716990000000_0",
+    "patternSignature": "技术文档",
+    "suggestedPipelineName": "文档处理管线",
+    "suggestedKeywords": ["文档", "技术文档"],
+    "reason": "过去7天内「技术文档」相关任务出现6次",
+    "status": "pending",
+    "suppressUntil": null,
+    "sourcePattern": "技术文档",
+    "createdAt": 1716990000000,
+    "updatedAt": null
+  }
+]
+特殊说明：结果按 createdAt DESC 排序（最新推荐在前）。suggestedKeywords 字段在 SQLite 中以 JSON 字符串存储，读取时自动反序列化为数组。
+
+### 6.3.13 PATCH /api/config/recommendations/:id
+
+用途：用户对推荐卡片执行采纳或忽略操作。
+路径参数：
+请求参数（Body）：
+响应体示例（忽略操作）：
+[json]
+{
+  "id": "rec_1716990000000_0",
+  "patternSignature": "技术文档",
+  "suggestedPipelineName": "文档处理管线",
+  "suggestedKeywords": ["技术文档"],
+  "reason": "过去90天内「技术文档」相关任务出现3次",
+  "status": "dismissed",
+  "suppressUntil": 1717596000000,
+  "sourcePattern": "技术文档",
+  "createdAt": 1716990000000,
+  "updatedAt": 1716990050000
+}
+失败处理：
+status 不为 "accepted" 或 "dismissed" → 400 + TODO_E_INPUT_002
+推荐记录不存在 → 404 + TODO_E_RECO_002
+特殊说明：status="dismissed" 时，后端自动设置 suppressUntil = Date.now() + 7 * 24 * 60 * 60 * 1000（7 天抑制窗口），FrequencyAnalyzer 在 suppressUntil 到期前不会为同一模式再次生成推荐。status="accepted" 时 suppressUntil 保持原值（90 天冷却窗口由分析层本身判断）。
+
+## 6.4 错误码体系
+
+
+### 6.4.1 格式约定
+
+错误码格式为 TODO_E_<DOMAIN>_<NNN>，其中：
+TODO_E 为系统统一前缀，用于日志全文检索
+DOMAIN 为功能域标识（见下表）
+NNN 为三位数字序号，同一 DOMAIN 内递增
+
+### 6.4.2 错误码全表
+
+注：TODO_E_ROUTE_001 和 TODO_E_RECO_001 属于预期业务状态，不在响应体中以 error 对象出现，仅作为内部日志代码使用。AI 相关错误（TODO_E_AI_*）在 decompose 接口中触发降级而非报错，仅在 route / analyze 等无法降级的场景下返回 503。
+
+## 6.5 鉴权与安全
+
+
+### 6.5.1 内部 API 无鉴权
+
+Express 后端的内部 REST API（/api/*）面向单机部署场景，所有端点不携带认证逻辑。前端与后端运行在同一主机或同一受控内网，通过 CORS 来源白名单限制访问。
+
+### 6.5.2 外部服务 Bearer Token
+
+AI 服务密钥（aiApiKey）和 πOS 令牌（piosApiToken）仅在调用对应外部服务时注入请求头：
+AI 调用：Authorization: Bearer <aiApiKey>（由 aiClient.js 注入）
+πOS 调用：Authorization: Bearer <piosApiToken>（由 piosClient.js 注入）
+两个密钥存储于 SQLite config 表，永远不出现在 GET /api/config 的响应体中。仅有 hasApiKey（boolean）和 hasPiosToken（boolean）两个脱敏指示字段对外暴露。
+
+### 6.5.3 CORS 配置
+
+服务端通过 cors 中间件严格限制跨域来源：
+origin: process.env.FRONTEND_URL  （默认 http://localhost:5173）
+methods: GET, POST, PATCH, DELETE, OPTIONS
+allowedHeaders: Content-Type, Authorization
+credentials: true
+生产部署时须将 FRONTEND_URL 精确设置为前端实际域名，杜绝通配符来源。
+
+## 6.6 限流 / 重试 / 幂等性
+
+
+### 6.6.1 频率分析节流
+
+FrequencyAnalyzer 通过 analyzerLastRunAt 与 analyzerThrottleMs（默认 3 600 000 ms，即 1 小时）的差值实现节流。每次 POST /api/ai/analyze 调用均先在服务层进行本地时间比对，未达阈值则直接返回空数组，不发出任何 AI 请求。
+
+### 6.6.2 AI 请求超时
+
+所有 AI 调用经由 aiClient.js 统一包装，使用 Node.js 原生 AbortController 实现 30 秒强制超时。超时后触发 AbortError，上层服务捕获后视场景执行降级或返回 503。
+
+### 6.6.3 πOS 请求重试
+
+piosClient.js 调用 πOS 接口时，对 5xx 响应执行最多 2 次重试，每次重试前等待 1 秒退避。401 错误不重试，直接上抛。重试耗尽后以 TODO_E_PIOS_002 报错。
+
+### 6.6.4 任务创建幂等性
+
+POST /api/tasks 支持客户端提供 id 字段。TaskReviewModal 批量创建时，若因网络抖动需要重试，前端携带相同 id 再次请求，SQLite 主键约束保证不会写入重复记录。
+
+### 6.6.5 πOS 创建任务幂等性
+
+piosClient.createTask 在每次调用时生成唯一 Idempotency-Key（UUID v4）并通过请求头传递给 πOS，πOS 端依此实现幂等去重。
+
+### 6.6.6 SSE 心跳
+
+GET /api/pipeline/status-stream 端点使用两个独立计时器：数据推送计时器（每 5 秒轮询，有变更时推送数据帧）和心跳计时器（连续 30 秒无数据帧推出时发送 : heartbeat\n\n）。两个计时器相互独立，心跳计时器在每次成功推送数据帧后重置，以防止反向代理因连接空闲断开 TCP 连接。正常轮询周期内有数据推送时，心跳帧不会在同一时间窗口内额外发送。
+
+## 6.7 外部 API 集成契约
+
+
+### 6.7.1 OpenAI 兼容 Chat Completions
+
+基础信息：
+三种调用场景对比：
+AI 响应均需去除 Markdown 代码围栏（ `json ... ` ）后再解析。
+
+### 6.7.2 πOS Task API（可选）
+
+仅当 PIOS_API_BASE_URL 环境变量已设置时激活。taskService 通过 isPiosConfigured() 开关决定是走本地 SQLite 还是委托 piosClient。
+πOS 为主存储时，SQLite tasks 表不写入数据；若 πOS 断连，须手动切换回本地模式（清除 PIOS_API_BASE_URL 环境变量或通过 PATCH /api/config 置空 piosApiBaseUrl）。
+
+### 6.7.3 πOS Pipeline API（可选）
+
+管线功能依赖 πOS，本地无管线状态存储。
+所有 πOS 请求统一通过 piosClient.request() 内部方法发送，携带 Content-Type: application/json 和可选的 Bearer Token 头。πOS 未配置时，调用 trigger/status 接口均返回 503 + TODO_E_PIOS_001。
+
+## 6.8 版本策略
+
+内部 REST API（/api/*）为单实例部署，不设版本前缀，无兼容性演进需求。路由命名保持稳定，若需破坏性变更需整包升级部署。
+πOS 外部 API 固定使用 /api/v1/ 前缀，由 πOS 平台方负责向后兼容维护。
+AI 模型版本由 AppConfig.aiModel 字段控制，通过 PATCH /api/config 动态切换，无需代码变更即可升级或降级模型。当前默认值为 gpt-4o-mini。
+
+## 6.9 状态机
+
+
+### 6.9.1 Task 状态机
+
+图 10　图6-1 Task 生命周期状态机
+Task.pipelineStatus 子状态机（在 Task.status=pending 期间叠加）：
+[图 11　图6-2 Task.pipelineStatus 管线执行子状态机 - mermaid 渲染失败，保留源代码]
+[mermaid]
+stateDiagram-v2
+  %% caption: 图6-2 Task.pipelineStatus 管线执行子状态机
+
+  [*] --> "null（未触发）" : 任务创建
+  "null（未触发）" --> triggered : POST /api/pipelines/trigger 成功
+  triggered --> running : πOS 回调 / SSE 推送
+  running --> completed : 执行完成
+  running --> failed : 执行失败
+  completed --> [*]
+  failed --> triggered : 重新触发
+
+### 6.9.2 Recommendation 状态机
+
+图 12　图6-3 Recommendation 生命周期状态机
+dismissed 状态下 suppressUntil 字段非 null，FrequencyAnalyzer 在窗口内遇到同一 sourcePattern 时不再生成新推荐。accepted 状态下进入 90 天冷却期，由 recommendationService.extractPatterns 在统计阶段过滤。
+
+# 8 附录
+
+
+## 8.1 待澄清项与假设
+
+下表汇总本文件在起草过程中对 PRD/SRS 未明确事项做出的工程假设。开工前须由相关方书面确认；任一假设不成立时须按变更流程同步修订相关章节。
+
+## 8.2 关键技术假设
+
+
+## 8.3 缩略语
+
+
+## 8.4 文档维护
+
+本文件对应 PRD-TDL-2026-002 V2.0、SRS-TDL-2026-002 V2.0 同一需求基线。任何对需求基线的变更须同步触发本文件相关章节的修订；任何对接口契约、错误码、状态机的修订须经跨章一致性核对，确保实体命名、状态枚举、关键数字、错误码、接口路径在各章节中保持一致。
+
+# 附录 B 统一枚举与状态机
+
+本附录汇总全文使用的所有枚举值、状态机定义与状态映射规则，供开发与测试一处查阅。
+
+## B.1 任务相关枚举
+
+
+### B.1.1 Task.status
+
+
+### B.1.2 Task.pipelineStatus
+
+
+### B.1.3 Task.source
+
+
+### B.1.4 Task.priority
+
+
+## B.2 管线执行枚举（外部 πOS）
+
+
+### B.2.1 Execution.status（πOS 返回的原始状态）
+
+
+## B.3 推荐相关枚举
+
+
+### B.3.1 Recommendation.status
+
+
+## B.4 Config 关键字段
+
+
+## B.5 错误码 DOMAIN 划分
+
+
+## B.6 状态机汇总
+
+
+### B.6.1 Task 双维状态机
+
+Task.status 与 Task.pipelineStatus 正交组合，合法组合如下：
+
+### B.6.2 推荐冷却规则
+
+同一 patternSignature：
+  - accepted 后 90 天内：不再生成新推荐
+  - dismissed 后 7 天内（suppressUntil 生效）：不再生成新推荐
+  - dismissed 7 天后、90 天内：受 createdAt 90 天冷却保护
+  - 90 天后：可再次生成新推荐（同一 signature）
+
+[TABLE]
+文件编号 | TSD-TDL-2026-002
+版本号 | V3.0
+密　　级 | 商业秘密 · 仅限项目相关方
+编制日期 | 2026-05-26
+[/TABLE]
+
+
+[TABLE]
+角色 | 关注章节
+前端工程师 | 2、3、4（BP-01/05）、6（SSE 部分）
+后端工程师 | 2、3、5、6（REST API 契约）
+测试工程师 | 4（业务流+异常）、6.4（错误码）、附录 B
+架构评审 | 2、3（选型论证）
+[/TABLE]
+
+
+[TABLE]
+中文 | 英文标识符 | 说明
+任务 | Task | 待办条目，系统主实体
+管线 | Pipeline | πOS 工作流定义
+执行 | Execution | Pipeline 一次运行实例
+推荐 | Recommendation | FrequencyAnalyzer 输出的管线推荐
+配置 | Config | 系统运行时配置，key-value 存储
+拆解结果 | DecomposedTask | AI 拆解返回的单条结构化任务
+[/TABLE]
+
+
+[TABLE]
+中文 | 英文标识符 | 层次
+输入面板 | InputPanel | 前端组件
+任务列表面板 | TaskListPanel | 前端组件
+任务审核弹窗 | TaskReviewModal | 前端组件
+推荐面板 | RecommendationPanel | 前端组件
+配置面板 | ConfigPanel | 前端组件
+管线 SSE Hook | usePipelineSSE | 前端 Hook
+任务服务 | taskService | 后端 Service
+AI 服务 | aiService | 后端 Service
+路由服务 | routerService | 后端 Service
+推荐服务 | recommendationService | 后端 Service
+配置服务 | configService | 后端 Service
+[/TABLE]
+
+
+[TABLE]
+实体字段 | 枚举值
+Task.status | pending / completed
+Task.pipelineStatus | null / triggered / running / completed / failed
+Task.source | text / voice / paste / ai
+Task.priority | low / medium / high
+Recommendation.status | pending / accepted / dismissed
+[/TABLE]
+
+
+[TABLE]
+编号 | 文档名 | 版本
+PRD-TDL-2026-002 | 智能待办事项系统产品需求文档 | V3.0
+SRS-TDL-2026-002 | 智能待办事项系统需求规格说明书 | V3.0
+— | better-sqlite3 官方文档 | v12.x
+— | Express 4.x API Reference | v4.21
+— | Vite 配置参考 | v8.x
+[/TABLE]
+
+
+[TABLE]
+评估维度 | 单 HTML 文件（V1） | SPA（纯前端） | B/S 三层单体（V2） | 微服务
+部署复杂度 | 极低（零构建） | 低 | 中（前后端两进程） | 高（多服务编排）
+数据持久化 | localStorage / πOS | localStorage / 第三方 BaaS | 本地 SQLite，自主可控 | 独立数据库服务
+AI 密钥安全 | 暴露在浏览器端 | 暴露在浏览器端 | 密钥存储于服务端 env | 密钥存储于服务端 env
+SSE 实时推送 | 轮询模拟 | 轮询模拟 | 原生 SSE 端点 | 原生 SSE / WebSocket
+并发控制 | 乐观 UI + 时间戳 | 乐观 UI + 时间戳 | 后端事务，updatedAt 校验 | 分布式事务
+离线队列 | 需要 localStorage 写队列 | 需要 localStorage 写队列 | 不需要（SQLite 本地可写） | 不需要
+团队规模适配 | 单人 | 1–2 人 | 2–5 人 | 5 人以上
+综合评分 | ★★☆☆☆ | ★★★☆☆ | ★★★★★ | ★★★☆☆
+[/TABLE]
+
+
+[TABLE]
+层次 | 文件/模块 | 职责
+Routes（路由层） | routes/tasks.js 等 | HTTP 方法与路径映射，参数验证
+Controllers（控制层） | controllers/taskController.js 等 | 请求解包、响应组装、错误处理
+Services（服务层） | services/taskService.js 等 | 业务逻辑、事务边界、领域规则
+External / DB（外部层） | external/aiClient.js、db.js 等 | 数据库同步读写、第三方 HTTP 调用
+[/TABLE]
+
+
+[TABLE]
+层次 | 模块 | 职责
+Components（视图层） | InputPanel、TaskListPanel、TaskItem 等 | UI 渲染、用户事件捕获
+Context / Services（状态层） | AppContext（useReducer）、usePipelineSSE | 全局状态、副作用、API 调用封装
+[/TABLE]
+
+
+[TABLE]
+模块 | 所属层 | 主要职责 | 关键方法/端点
+routes/tasks.js | 后端·路由 | 任务 CRUD 路由注册 | GET/POST/PATCH/DELETE /api/tasks
+routes/ai.js | 后端·路由 | AI 能力路由注册 | POST /api/ai/decompose、/route、/analyze
+routes/pipelines.js | 后端·路由 | 管线路由注册 | POST /api/pipelines、/trigger；GET 执行状态
+routes/config.js | 后端·路由 | 配置与推荐路由 | GET/PATCH /api/config；推荐列表与采纳
+taskController.js | 后端·控制 | 请求解包、响应组装 | listTasks、createTask、updateTask、deleteTask
+aiController.js | 后端·控制 | AI 请求代理、结果格式化 | decompose、routePipeline、analyze
+taskService.js | 后端·服务 | 任务 CRUD 业务逻辑、事务边界 | findAll、create、patch、remove
+aiService.js | 后端·服务 | 拆解/路由/分析业务编排 | decompose、route、triggerAnalysis
+configService.js | 后端·服务 | 配置读写、推荐生命周期管理 | getConfig、setConfig、acceptRecommendation、dismissRecommendation
+db.js | 后端·外部 | SQLite 初始化、WAL 开启、Schema 迁移 | getDb（单例）
+aiClient.js | 后端·外部 | OpenAI-compatible Chat Completions 调用 | chat（messages, opts）
+piosClient.js | 后端·外部 | πOS REST 调用封装、开关控制 | createPipeline、triggerExecution、getExecution
+SSE 广播模块 | 后端·独立 | EventEmitter 管理、客户端注册/注销 | subscribe、broadcast
+AppContext | 前端·状态 | 全局 State + Reducer、API 调用发起 | dispatch（action）、tasks、config
+usePipelineSSE | 前端·状态 | EventSource 订阅、断线重连、状态同步 | —（Hook，自动副作用）
+InputPanel | 前端·视图 | 文字/语音/粘贴三路录入，防抖 300 ms | onSubmit → decompose
+TaskListPanel | 前端·视图 | 任务列表渲染、过滤/排序 | —
+TaskItem | 前端·视图 | 单条任务渲染、内联编辑、状态切换 | onStatusChange、onEdit
+TaskReviewModal | 前端·视图 | AI 拆解结果确认弹窗、批量创建 | onConfirm（tasks[]）
+RecommendationPanel | 前端·视图 | 推荐卡展示、采纳/忽略操作 | onAccept、onDismiss
+ConfigPanel | 前端·视图 | AI Key / πOS Token / 管线规则配置 | onSave
+[/TABLE]
+
+
+[TABLE]
+模块 / 接口 | 第一期 | 第二期
+GET /api/tasks | ✓ | —
+POST /api/tasks | ✓ | —
+PATCH /api/tasks/:id | ✓ | —
+DELETE /api/tasks/:id | ✓ | —
+POST /api/ai/decompose（含降级） | ✓ | —
+POST /api/ai/route | ✓ | —
+GET /api/pipeline/status-stream（SSE） | ✓ | —
+POST /api/pipelines/trigger（简化版） | ✓（可选） | —
+GET /api/pipelines | ✓ | —
+POST /api/pipelines（ConfigPanel） | — | ✓
+DELETE /api/pipelines/:id | — | ✓
+POST /api/ai/analyze（推荐分析） | — | ✓
+GET /api/config/recommendations | — | ✓
+PATCH /api/config/recommendations/:id | — | ✓
+GET /api/config | ✓ | —
+PATCH /api/config | ✓ | —
+HTTPS 强制部署 | ✓（生产环境） | —
+πOS Token 配置（后端 .env） | ✓ | —
+[/TABLE]
+
+
+[TABLE]
+层次 / 类别 | 技术 | 选用版本 | 可替换 | 主要被否决替代方案
+前端框架 | React | 19.2.6 | 中 | Vue 3、Angular 17、Svelte 5
+前端构建 | Vite | 8.0.12 | 高 | webpack 5、Parcel 2、esbuild
+前端样式 | CSS Modules | 原生（Vite 内置支持） | 中 | Tailwind CSS 3、styled-components 6
+前端状态管理 | React Context API + useReducer | React 19 内置 | 中 | Redux Toolkit、Zustand、Jotai
+前端路由 | 无路由库 | — | 高 | React Router 7、TanStack Router
+HTTP 客户端 | 原生 fetch() + AbortController | 浏览器内置 | 高 | axios 1.x、ky、wretch
+语音录入 | Web Speech API | 浏览器内置 | 中 | OpenAI Whisper API、Web Audio API
+实时推送（客户端） | EventSource（SSE） | 浏览器内置 | 中 | WebSocket、长轮询
+后端运行时 | Node.js | 20 LTS | 低 | Deno 2、Bun 1
+后端框架 | Express | 4.21.2 | 中 | Fastify 5、Koa 2、NestJS 10
+实时推送（服务端） | Express res.write（SSE） | Express 内置 | 中 | ws、socket.io
+数据库引擎 | SQLite | 内置（Node.js 绑定） | 中 | PostgreSQL 16、MySQL 8、MongoDB 7
+数据库驱动 | better-sqlite3 | 12.x | 低 | node-sqlite3、sql.js、Prisma
+AI 对接 | OpenAI-compatible Chat Completions | 接口规范，非特定 SDK | 高 | 固定绑定 OpenAI SDK、固定绑定 DeepSeek
+开发工具 | ESLint + node --watch | 各自最新稳定 | 高 | Biome、ts-node、nodemon
+[/TABLE]
+
+
+[TABLE]
+技术 | 团队熟悉度 | 生态成熟度 | 隐性运维 | 可替代性 | 契合度 | 总分
+React 19 | 5 | 5 | 4 | 3 | 5 | 22
+Vite 8 | 4 | 5 | 5 | 4 | 5 | 23
+Node.js 20 + Express 4 | 5 | 5 | 5 | 3 | 5 | 23
+SQLite + better-sqlite3 12 | 4 | 4 | 5 | 3 | 5 | 21
+Web Speech API | 3 | 3 | 5 | 4 | 4 | 19
+OpenAI-compatible API | 4 | 5 | 4 | 5 | 5 | 23
+SSE（EventSource + res.write） | 3 | 4 | 5 | 4 | 5 | 21
+[/TABLE]
+
+
+[TABLE]
+能力 | Chrome 120+ | Edge 120+ | Safari 17+ | Firefox 121+
+React 19 / ES2022 语法 | ✓ | ✓ | ✓ | ✓
+CSS Modules（Vite 编译产物） | ✓ | ✓ | ✓ | ✓
+EventSource（SSE） | ✓ | ✓ | ✓ | ✓
+Web Speech API — 语音识别 | ✓ | ✓ | △ 部分支持 | △ 需手动开启
+Web Speech API — 连续识别 | ✓ | ✓ | △ iOS 受限 | ✗ 不支持
+AbortController + fetch | ✓ | ✓ | ✓ | ✓
+ES Module（type: module） | ✓ | ✓ | ✓ | ✓
+[/TABLE]
+
+
+[TABLE]
+包名 | 版本 | 许可证 | 用途 | 安全备注
+react | 19.2.6 | MIT | UI 框架核心 | 活跃维护，无已知 CVE
+react-dom | 19.2.6 | MIT | DOM 渲染器 | 同上
+[/TABLE]
+
+
+[TABLE]
+包名 | 版本 | 许可证 | 用途 | 安全备注
+express | 4.21.2 | MIT | HTTP 服务框架，路由与中间件 | 定期跟进安全补丁
+cors | 2.x | MIT | 跨域请求头管理，保护 API 端点 | 配置 origin 白名单
+better-sqlite3 | 12.x | MIT | SQLite 同步驱动，含原生 C 绑定 | 原生模块需与 Node 版本匹配编译
+[/TABLE]
+
+
+[TABLE]
+风险 | 触发条件 | 缓解措施 | 等级
+SQLite 写锁争用 | 多个并发请求同时写入（未来多用户场景） | WAL 模式已启用，当前单用户场景下无实际争用；若并发量上升需迁移 PostgreSQL | 提示
+Web Speech API 浏览器兼容缺口 | 用户使用 Firefox 或旧版 Safari 访问 | 前端检测 window.SpeechRecognition 是否存在，不支持时隐藏语音按钮并提示降级 | 重要
+AI 提供商接口不兼容 | 切换服务商后响应体字段偏差（choices[0].message.content 为空或格式异常） | aiClient.js 添加防御性解析与非空校验，捕获异常后返回结构化错误码 | 重要
+better-sqlite3 原生模块编译失败 | Node.js 大版本升级（如 20→22）后 ABI 不匹配 | npm rebuild better-sqlite3 后恢复；在 package.json 锁定 Node 版本范围 | 重要
+SQLite 并发写入 BUSY | 多个并发 POST/PATCH 请求触发 SQLITE_BUSY 异常 | db.js 初始化设置 db.pragma('busy_timeout = 5000')，自动重试 5s；单用户场景极少触发 | 重要
+SSE 连接泄漏 | 客户端断开后服务端未清理 res.write 监听器 | 监听 req.on('close') 事件，显式关闭连接并从 EventEmitter 解除注册 | 重要
+AI 响应超时阻塞 | 网络抖动或模型冷启动导致 /api/ai/decompose 30 s+ 无响应 | 前端使用 AbortController 设置 30 s 超时；后端对外部 AI 请求同步设置 signal | 重要
+React Context 全树重渲染性能劣化 | 任务列表超过 500 条时频繁状态更新 | 拆分 Context（任务列表 / 配置 / 推荐分离）；对 TaskItem 使用 React.memo | 提示
+CSS Modules 类名哈希冲突 | Vite 升级导致哈希算法变更，生产包类名与缓存不一致 | 生产构建后全量替换静态资源；不依赖 class 名作为业务逻辑判断依据 | 提示
+[/TABLE]
+
+
+[TABLE]
+编号 | 业务流名称 | 触发方式 | 核心路径
+BP-01 | 录入→AI 拆解→任务创建→管线触发 | 用户文字/语音/粘贴输入 | InputPanel → /api/ai/decompose → TaskReviewModal → /api/tasks → /api/pipelines/trigger
+BP-02 | 管线状态 SSE 推送→任务状态联动 | 管线触发后持续运行 | EventSource → usePipelineSSE → AppContext dispatch
+BP-03 | 高频任务分析→推荐生成→采纳/忽略 | 用户手动或定时触发 | /api/ai/analyze → recommendationService → RecommendationPanel → /api/config/recommendations/:id
+BP-04 | 管线创建→关键词规则绑定 | 用户在 ConfigPanel 操作 | /api/pipelines → piosClient → PATCH /api/config
+BP-05 | 基础 CRUD（内联编辑/删除/筛选） | 用户直接操作任务列表 | GET/PATCH/DELETE /api/tasks → SQLite → 乐观 UI
+[/TABLE]
+
+
+[TABLE]
+用例编号 | 测试场景 | 前置条件 | 预期结果
+UC-推荐-01 | 高频模式达阈值，AI 正常返回 | tasks 表中同一 category 出现 ≥3 条，无现有管线 | recommendations 表新增 pending 记录，RecommendationPanel 展示推荐卡
+UC-推荐-02 | 高频模式未达阈值 | 所有 category 出现次数 < 3 | recommendations 表无新增，前端 count=0
+UC-推荐-03 | AI 接口超时 | 模拟 OpenAI 超时 | recommendations 表无新增，analyzerLastRunAt 更新，前端显示 ai_failure 提示
+UC-推荐-04 | 用户采纳推荐 | recommendations 中存在 pending 记录 | status 变为 accepted，config 中新增 keywordRule
+UC-推荐-05 | 用户忽略推荐 | recommendations 中存在 pending 记录 | status 变为 dismissed，suppressUntil = NOW + 7天
+UC-推荐-06 | 7 天内已忽略模式再次分析 | suppressUntil > NOW | 该 patternSignature 被频率门控跳过，不产生新推荐
+[/TABLE]
+
+
+[TABLE]
+失败原型 | 涉及 BP | 错误码 / 现象 | 恢复路径
+AI 服务不可达（OpenAI 超时/非 200） | BP-01、BP-03 | BP-01: 前端 Toast"AI 拆解超时，已按标点分割"，降级拆解照常进行；BP-03: 返回 {count:0, error:'ai_failure'}，analyzerLastRunAt 更新 | BP-01 降级无需人工介入；BP-03 等待下次手动或定时触发
+πOS 管线触发失败（网络中断/认证失败） | BP-01、BP-04 | BP-01: HTTP 5xx 或超时，pipelineStatus=null；BP-04: 503，管线未创建 | BP-01: 用户在任务详情手动重触发 POST /api/pipelines/trigger；BP-04: 检查 PIOS_API_BASE_URL 配置后重试
+SSE 连接中断（反向代理超时/网络抖动） | BP-02 | EventSource.onerror 触发，前端显示上次已知 pipelineStatus（stale state） | usePipelineSSE 监听 onerror 自动重建 EventSource 实例；浏览器原生退避重连；重连后后端推送最新状态
+SQLite 写入失败（磁盘满/文件锁） | BP-01、BP-04、BP-05 | Express 返回 500，taskService/configService 事务回滚，数据库状态不变 | 前端乐观 UI 回滚至操作前状态，Toast 提示错误信息；检查磁盘空间后用户重试；WAL 模式下读取不受写入失败影响
+[/TABLE]
+
+
+[TABLE]
+前端字段名 | SQLite 列名 | 类型 | 转换说明
+name | name | TEXT | 原样写入，去首尾空白
+status | status | TEXT | 默认 pending，枚举校验
+priority | priority | TEXT | 默认 medium，枚举校验
+category | category | TEXT | 可为 null
+timeLabel | timeLabel | TEXT | 自然语言时间标签，不解析
+dueAt | dueAt | INTEGER | 前端传 Unix 毫秒，后端原样存储
+source | source | TEXT | 枚举：text / voice / paste / ai
+pipelineId | pipelineId | TEXT | 初始为 null
+executionId | executionId | TEXT | 初始为 null
+pipelineStatus | pipelineStatus | TEXT | 初始为 null
+—（后端生成） | id | TEXT | crypto.randomUUID()
+—（后端生成） | createdAt | INTEGER | Date.now()（毫秒）
+—（后端生成） | updatedAt | INTEGER | 同 createdAt，初次写入
+—（后端生成） | completedAt | INTEGER | 创建时为 null
+[/TABLE]
+
+
+[TABLE]
+字段名 | SQLite 列 | 类型 | 可空 | 默认值 | 描述 | PATCH 可写
+id | id | TEXT | 否 | 后端生成 UUID | 全局唯一主键 | 否
+name | name | TEXT | 否 | — | 任务名称 | 是
+status | status | TEXT | 否 | pending | 任务状态：pending / completed | 是
+priority | priority | TEXT | 是 | medium | 优先级：low / medium / high | 是
+category | category | TEXT | 是 | null | 自定义分类标签 | 是
+timeLabel | timeLabel | TEXT | 是 | null | 自然语言时间描述（如"明天下午"） | 是
+dueAt | dueAt | INTEGER | 是 | null | 截止时间，Unix 毫秒 | 是
+source | source | TEXT | 是 | null | 录入来源：text / voice / paste / ai | 否
+pipelineId | pipelineId | TEXT | 是 | null | 关联的 πOS 管线 ID | 是
+executionId | executionId | TEXT | 是 | null | 关联的 πOS 执行实例 ID | 是
+pipelineStatus | pipelineStatus | TEXT | 是 | null | 管线执行状态：triggered / running / completed / failed | 是（由 SSE 更新）
+completedAt | completedAt | INTEGER | 是 | null | 完成时间，Unix 毫秒；status 变 completed 时后端写入 | 否（后端控制）
+createdAt | createdAt | INTEGER | 否 | 后端 Date.now() | 创建时间，Unix 毫秒 | 否
+updatedAt | updatedAt | INTEGER | 是 | 后端 Date.now() | 最后更新时间，Unix 毫秒 | 否（后端强制覆写）
+[/TABLE]
+
+
+[TABLE]
+key 名 | 值类型 | 默认值 | 描述
+aiApiKey | string | "" | OpenAI-compatible API 密钥，读取时脱敏
+aiBaseUrl | string | "https://api.openai.com/v1" | AI 接口基础 URL
+aiModel | string | "gpt-4o-mini" | 默认调用模型名称
+piosApiBaseUrl | string | "" | πOS API 基础地址，为空则禁用管线功能
+piosToken | string | "" | πOS 鉴权 Token，读取时脱敏
+analyzerWindowDays | number（JSON 序列化为 string） | "90" | 频率分析时间窗口（天）
+analyzerFrequencyThreshold | number（JSON 序列化为 string） | "3" | 推荐所需最低模式频次
+autoAnalyzeEnabled | boolean（JSON 序列化为 string） | "false" | 是否启用定时自动分析
+[/TABLE]
+
+
+[TABLE]
+字段名 | SQLite 列 | 类型 | 可空 | 默认值 | 描述
+id | id | TEXT | 否 | 后端生成 UUID | 推荐记录主键
+patternSignature | patternSignature | TEXT | 是 | null | N-gram 关键词排序拼接签名，用于去重
+suggestedPipelineName | suggestedPipelineName | TEXT | 是 | null | AI 推荐的管线名称
+suggestedKeywords | suggestedKeywords | TEXT | 是 | null | JSON 数组字符串，读取时 Service 层解析
+reason | reason | TEXT | 是 | null | AI 生成的推荐理由文本
+status | status | TEXT | 否 | pending | 推荐状态：pending / accepted / dismissed
+suppressUntil | suppressUntil | INTEGER | 是 | null | 抑制截止时间，Unix 毫秒；dismissed 时写入
+sourcePattern | sourcePattern | TEXT | 是 | null | 触发该推荐的原始模式描述
+createdAt | createdAt | INTEGER | 否 | 后端 Date.now() | 推荐创建时间，Unix 毫秒
+updatedAt | updatedAt | INTEGER | 是 | 后端 Date.now() | 最后更新时间，Unix 毫秒
+[/TABLE]
+
+
+[TABLE]
+场景 | 事务策略 | 说明
+单条任务创建（DL-01） | 隐式自动提交 | 单条 INSERT，SQLite 默认每条语句一个事务，无需显式包裹
+AI 拆解批量创建 | 每条独立 INSERT | 各任务相互独立，单条失败不影响其他，无跨任务事务需求
+配置批量更新（DL-05） | db.transaction()显式事务 | 多个 key 必须原子写入，任一失败全部回滚，防止配置半更新
+推荐状态更新 | 隐式自动提交 | 单行 UPDATE，隐式事务已足够
+推荐批量插入（DL-04） | db.transaction()显式事务 | 一次分析产生多条推荐，原子写入保证分析结果完整性
+[/TABLE]
+
+
+[TABLE]
+风险编号 | 风险描述 | 涉及字段 | 风险后果 | 防御措施 |  | 
+DP-01 | 时间戳单位混淆（毫秒 vs 秒） | dueAt、createdAt、updatedAt、completedAt、suppressUntil | 时间显示偏差 1000 倍，过期判断错误 | 统一约定所有时间戳为 Unix 毫秒；后端使用 Date.now() 写入，前端使用 new Date(ts) 转换；接口文档标注单位 |  | 
+DP-02 | config 表数值字段以 TEXT 存储 | analyzerWindowDays、analyzerFrequencyThreshold | typeof value === 'string'，直接用于算术运算结果为 NaN | configService 读取时统一调用 Number(value) 转换；写入前调用 String(value) 序列化 |  | 
+DP-03 | suggestedKeywords 为 JSON 字符串 | recommendations.suggestedKeywords | 前端直接展示原始字符串（含 ["引号） | Service 层返回推荐列表前，对每条记录执行 JSON.parse(suggestedKeywords ?? '[]')；parse 失败时降级为空数组 |  | 
+DP-04 | pipelineStatus null 与字符串 "null" 混淆 | tasks.pipelineStatus | SSE 判断状态变更时误判，重复触发更新广播 | 后端写入时严格使用 SQL NULL（不写字符串 "null"）；读取时检查 value ?? null 而非 `value \ | \ | null`，防止空字符串被误当 falsy
+DP-05 | AI 返回非法枚举值 | priority、status（AI 拆解结果） | 写入数据库后引发前端枚举渲染异常 | aiService 解析 DecomposedTask 后逐字段校验，不在枚举白名单内的值重置为默认值（priority → medium） |  | 
+[/TABLE]
+
+
+[TABLE]
+方法 | 语义 | 幂等 | 请求体
+GET | 查询，不修改状态 | 是 | 无
+POST | 创建资源或触发操作 | 否（含客户端 id 时除外） | JSON
+PATCH | 局部更新，仅传变更字段 | 是（字段级） | JSON
+DELETE | 删除资源 | 是 | 无
+[/TABLE]
+
+
+[TABLE]
+状态码 | 含义 | 典型场景
+200 | OK | GET / PATCH 成功
+201 | Created | POST 创建资源成功
+204 | No Content | DELETE 成功
+400 | Bad Request | 请求参数缺失或类型错误
+404 | Not Found | 资源不存在
+503 | Service Unavailable | 外部服务（πOS / AI）未配置或不可用
+500 | Internal Server Error | 服务器内部异常
+[/TABLE]
+
+
+[TABLE]
+序号 | 方法 | 路径 | 描述 | 请求体摘要 | 响应摘要 | 成功码
+1 | GET | /api/tasks | 获取全部任务 | — | Task[] | 200
+2 | POST | /api/tasks | 创建任务 | { name, priority?, category?, ... } | Task | 201
+3 | PATCH | /api/tasks/:id | 局部更新任务 | 任意可更新字段 | Task | 200
+4 | DELETE | /api/tasks/:id | 删除任务 | — | 空体 | 204
+5 | POST | /api/ai/decompose | AI 拆解自然语言 | { input, source? } | { tasks, isFallback } | 200
+6 | POST | /api/ai/route | 管线路由决策 | { taskName } | { pipelineId } | 200
+7 | POST | /api/ai/analyze | 触发频率分析与推荐生成 | — | { recommendations } | 200
+8 | GET | /api/pipeline/status-stream | SSE 管线状态推送 | — | EventStream | 200
+9 | POST | /api/pipelines | 创建管线（πOS） | { name } | { pipelineId } | 201
+10 | POST | /api/pipelines/trigger | 触发管线执行 | { pipelineId } | { executionId } | 200
+11 | GET | /api/pipelines/:id/executions/:execId | 查询执行状态 | — | ExecutionStatus | 200
+12 | GET | /api/config | 获取安全配置 | — | SafeConfig | 200
+13 | PATCH | /api/config | 更新配置 | 任意配置字段 | SafeConfig | 200
+14 | GET | /api/config/recommendations | 获取推荐列表 | — | Recommendation[] | 200
+15 | PATCH | /api/config/recommendations/:id | 采纳或忽略推荐 | { status } | Recommendation | 200
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明 |  |  | 
+id | string | 否 | 客户端自定义 id；提供时作为主键（幂等去重） |  |  | 
+name | string | 是 | 任务名称，不得为空字符串 |  |  | 
+priority | `"low" \ | "medium" \ | "high"` | 否 | 默认 "medium" | 
+category | string | 否 | 分类标签 |  |  | 
+timeLabel | string | 否 | 人类可读时间描述（如"明天下午3点"） |  |  | 
+dueAt | integer | 否 | Unix 毫秒时间戳 |  |  | 
+source | `"text" \ | "voice" \ | "paste" \ | "ai"` | 否 | 录入来源
+pipelineId | string | 否 | 关联管线 ID |  |  | 
+[/TABLE]
+
+
+[TABLE]
+参数 | 类型 | 说明
+id | string | 任务 ID
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 说明 |  |  | 
+name | string | 任务名称 |  |  | 
+status | `"pending" \ | "completed"` | 任务状态 |  | 
+priority | `"low" \ | "medium" \ | "high"` | 优先级 | 
+category | string | 分类标签 |  |  | 
+timeLabel | string | 时间描述 |  |  | 
+dueAt | integer | 截止时间戳（毫秒） |  |  | 
+pipelineId | string | 关联管线 ID |  |  | 
+executionId | string | 本次执行 ID |  |  | 
+pipelineStatus | `"triggered" \ | "running" \ | "completed" \ | "failed"` | 管线执行状态
+completedAt | integer | 任务完成时间戳（毫秒） |  |  | 
+[/TABLE]
+
+
+[TABLE]
+参数 | 类型 | 说明
+id | string | 任务 ID
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明 |  | 
+input | string | 是 | 用户输入文本，不得为空 |  | 
+source | `"text" \ | "voice" \ | "paste"` | 否 | 录入来源，透传到创建任务的 source 字段
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明 |  | 
+text | string | 是 | AI 原始提取文本 |  | 
+correctedText | string | 是 | 纠错后文本（用于创建任务的 name） |  | 
+priority | `"low" \ | "medium" \ | "high"` | 否 | AI 判断优先级
+category | string | 否 | AI 判断分类 |  | 
+timeLabel | string | 否 | 人类可读时间描述 |  | 
+dueAt | integer | 否 | 仅当能精确推断时间戳时填写 |  | 
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明
+taskName | string | 是 | 待路由任务名称
+[/TABLE]
+
+
+[TABLE]
+πOS 返回值 | 系统映射值 | 说明
+"triggered" | "triggered" | 直接映射
+"running" | "running" | 直接映射
+"completed" / "success" | "completed" | 兼容两种别名
+"failed" / "error" | "failed" | 兼容两种别名
+其他未知值 | 保持上一个已知状态 | 记录 warn 日志，不覆写
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明
+pipelineId | string | 是 | 要触发的管线 ID
+[/TABLE]
+
+
+[TABLE]
+参数 | 类型 | 说明
+id | string | 推荐记录 ID
+[/TABLE]
+
+
+[TABLE]
+字段 | 类型 | 必填 | 说明 | 
+status | `"accepted" \ | "dismissed"` | 是 | 操作意图
+[/TABLE]
+
+
+[TABLE]
+DOMAIN | 含义
+INPUT | 请求参数校验
+DB | 数据库资源查询
+PIOS | πOS 外部 API 调用
+AI | AI 外部 API 调用
+ROUTE | 管线路由决策
+RECO | 推荐分析相关
+[/TABLE]
+
+
+[TABLE]
+错误码 | DOMAIN | HTTP 状态 | message 模板 | 触发条件
+TODO_E_INPUT_001 | INPUT | 400 | "字段 {field} 不能为空" | 必填字段缺失或值为空字符串
+TODO_E_INPUT_002 | INPUT | 400 | "字段 {field} 的值 {value} 无效" | 枚举值不在合法范围内（如 status 非 accepted/dismissed）
+TODO_E_DB_001 | DB | 404 | "Task not found: {id}" | 按 id 查询任务，记录不存在
+TODO_E_DB_002 | DB | 404 | "Recommendation not found: {id}" | 按 id 查询推荐，记录不存在
+TODO_E_PIOS_001 | PIOS | 503 | "πOS API 未配置：PIOS_API_BASE_URL 未设置" | 调用 πOS 时环境变量未设置
+TODO_E_PIOS_002 | PIOS | 503 | "πOS API 请求失败（{status} {method} {path}）" | πOS 返回 5xx，重试 2 次后仍失败
+TODO_E_PIOS_003 | PIOS | 503 | "πOS API 鉴权失败：Token 无效或已过期" | πOS 返回 401 Unauthorized
+TODO_E_AI_001 | AI | 503 | "AI API 未配置：缺少 AI_API_BASE_URL 或 AI_API_KEY" | aiClient 检测到环境变量缺失
+TODO_E_AI_002 | AI | 503 | "AI API 请求超时（30s）" | AbortController 触发超时取消；仅适用于 /api/ai/route 和 /api/ai/analyze；decompose 超时触发降级返回 200
+TODO_E_AI_003 | AI | 503 | "AI 响应解析失败：非法 JSON 数组" | AI 返回内容无法解析为预期 JSON 格式
+TODO_E_ROUTE_001 | ROUTE | —（无 HTTP 错误） | （不报错，返回 null） | 三阶段路由均无命中，pipelineId 返回 null，HTTP 200；预期业务结果，不作为错误处理；仅记录调试日志
+TODO_E_RECO_001 | RECO | —（无 HTTP 错误） | （不报错，返回空数组） | analyzerThrottleMs 未到期，跳过分析，HTTP 200；预期业务结果，不作为错误处理；仅记录调试日志
+TODO_E_RECO_002 | RECO | 404 | "Recommendation not found: {id}" | PATCH 推荐时 id 不存在（同 DB_002，RECO 域）
+[/TABLE]
+
+
+[TABLE]
+配置项 | 来源 | 默认值
+端点 | AppConfig.aiApiBaseUrl + /chat/completions | —
+模型 | AppConfig.aiModel | gpt-4o-mini
+鉴权 | Authorization: Bearer <AppConfig.aiApiKey> | —
+超时 | AbortController 30 s | 固定
+[/TABLE]
+
+
+[TABLE]
+场景 | 接口 | 系统提示关键词 | temperature | 返回格式
+拆解 decompose | POST /api/ai/decompose | "拆解为3~8条，严格输出JSON数组" | 0.4 | [{text, correctedText, priority, category, timeLabel?, dueAt?}]
+路由 route | POST /api/ai/route | "从给定ID列表中选择最合适的一个，输出单个ID或null" | 0 | 纯字符串（pipelineId 或 "null"）
+推荐 recommend | POST /api/ai/analyze | "根据高频关键词生成推荐，严格输出JSON数组" | 0 | [{id, text, reason, priority, category}]
+[/TABLE]
+
+
+[TABLE]
+方法 | πOS 端点 | 对应本地操作
+GET | /api/v1/tasks | SELECT * FROM tasks
+POST | /api/v1/tasks | INSERT INTO tasks
+PATCH | /api/v1/tasks/:id | UPDATE tasks WHERE id=?
+DELETE | /api/v1/tasks/:id | DELETE FROM tasks WHERE id=?
+[/TABLE]
+
+
+[TABLE]
+操作 | 方法 | πOS 端点 | 请求体 | 返回
+创建管线 | POST | /api/v1/pipelines | { name } | { pipelineId }
+触发执行 | POST | /api/v1/pipelines/:id/trigger | — | { executionId }
+查询执行状态 | GET | /api/v1/pipelines/:id/executions/:execId | — | ExecutionStatus
+[/TABLE]
+
+
+[TABLE]
+编号 | 假设内容 | 相关章节 | 影响说明
+A-01 | πOS Task/Pipeline API 在 PIOS_API_BASE_URL 未配置时，系统完全使用本地 SQLite，功能不降级 | 2.2、5.2 | 若 πOS 为必选，需在 ConfigPanel 增加必填校验
+A-02 | SQLite 单文件数据库足够支撑 ≤500 条任务的读写性能需求（WAL 模式下并发读不阻塞写） | 2.1、5.4 | 超过 500 条时可能需要分页查询优化
+A-03 | AI API 提供商支持 OpenAI-compatible Chat Completions v1 协议，包括 response_format JSON 字段 | 6.7 | 不支持 JSON mode 的模型需在 prompt 中强约束输出格式
+A-04 | 前端生产部署与后端同域，或后端 CORS 白名单已包含前端域名 | 2.2、6.5 | 跨域场景需调整 CORS_ORIGIN 环境变量
+A-05 | πOS Execution.status 枚举集合为 triggered / running / completed / failed 四值 | 5.2、附录 B | 如 πOS 增加中间状态需更新状态机映射
+A-06 | better-sqlite3 在当前 Node.js 20 LTS 运行环境已预编译，无需重新编译 native addon | 3.6 | 升级 Node.js 主版本时需重新 npm rebuild
+[/TABLE]
+
+
+[TABLE]
+编号 | 假设 | 风险等级
+TA-01 | SSE 连接在反向代理（如 Nginx）后端不会被缓冲/关闭；依赖 30s 心跳保活 | 重要
+TA-02 | 语音识别（Web Speech API）仅在 HTTPS 或 localhost 下可用 | 提示
+TA-03 | config 表中 JSON 序列化的值不超过 SQLite TEXT 列限制（约 1GB，实际远小于此） | 提示
+TA-04 | better-sqlite3 同步 API 在 Express 同步路径中不会引起明显阻塞（任务数 <500，单次查询 <5ms） | 提示
+[/TABLE]
+
+
+[TABLE]
+缩略语 | 全称
+SPA | Single Page Application，单页应用
+SSE | Server-Sent Events，服务器推送事件
+CORS | Cross-Origin Resource Sharing，跨域资源共享
+WAL | Write-Ahead Logging，SQLite 写前日志模式
+ORM | Object-Relational Mapping，对象关系映射
+REST | Representational State Transfer，表述性状态传递
+CRUD | Create / Read / Update / Delete
+MVP | Minimum Viable Product，最小可行产品
+πOS | 云南数派自研业务操作系统平台
+CSP | Content Security Policy，内容安全策略
+XSS | Cross-Site Scripting，跨站脚本攻击
+[/TABLE]
+
+
+[TABLE]
+值 | 含义 | 前端显示 | 可手动设置
+pending | 进行中（默认） | 进行中 | 是
+completed | 已完成 | 已完成 | 是
+[/TABLE]
+
+
+[TABLE]
+值 | 含义 | 前端显示颜色 | 可手动触发
+null | 未触发管线 | 无标记 | N/A
+triggered | 已触发，等待执行 | 蓝色 | 否（后端触发）
+running | 执行中 | 橙色 | 否（SSE 更新）
+completed | 执行成功 | 绿色 | 否（SSE 更新）
+failed | 执行失败 | 红色 | 否（SSE 更新）
+[/TABLE]
+
+
+[TABLE]
+值 | 含义 | 设置时机
+text | 手动文字输入 | 用户在 InputPanel 键入后提交
+voice | 语音识别输入 | Web Speech API 识别完成后提交
+paste | 粘贴输入 | 粘贴触发 300ms 防抖后提交
+ai | AI 拆解产物 | TaskReviewModal 确认时批量创建
+[/TABLE]
+
+
+[TABLE]
+值 | 含义 | 排序权重
+high | 高优先级 | 1（最高）
+medium | 中优先级（默认） | 2
+low | 低优先级 | 3
+[/TABLE]
+
+
+[TABLE]
+πOS 原始值 | 系统映射值（Task.pipelineStatus） | 说明
+triggered | triggered | 直接映射
+running | running | 直接映射
+completed / success | completed | πOS 别名统一映射为 completed
+failed / error | failed | πOS 别名统一映射为 failed
+[/TABLE]
+
+
+[TABLE]
+值 | 含义 | 终态 | 后续效果
+pending | 待处理（新推荐默认） | 否 | 展示在 RecommendationPanel
+accepted | 用户已采纳 | 是 | 写入 Config.keywordRules；90 天冷却期生效
+dismissed | 用户已忽略 | 是 | suppressUntil = now + 7 days；7 天抑制
+[/TABLE]
+
+
+[TABLE]
+key | 值类型 | 默认值 | 说明
+aiApiBaseUrl | string | "" | AI 提供商 endpoint base URL
+aiApiKey | string | "" | AI API 密钥（不在 GET /api/config 返回）
+aiModel | string | "gpt-4o-mini" | 模型名称，可切换至 DeepSeek/Moonshot 等
+piosApiBaseUrl | string | "" | πOS 平台 base URL
+piosApiToken | string | "" | πOS Bearer Token（不在 GET /api/config 返回）
+defaultPipelineId | string | "" | 路由兜底管线 ID
+keywordRules | array | [] | [{keyword, pipelineId, priority}]
+pollingInterval | number | 5000 | SSE 后端轮询 πOS 间隔（ms）
+analyzerWindowDays | number | 90 | 分析窗口天数
+analyzerFrequencyThreshold | number | 3 | 触发推荐的最低词频
+analyzerThrottleMs | number | 3600000 | 分析限流间隔（ms），默认 1 小时
+analyzerLastRunAt | number | 0 | 上次分析时间戳（ms）
+[/TABLE]
+
+
+[TABLE]
+DOMAIN | 含义 | 示例
+INPUT | 请求参数校验失败 | TODO_E_INPUT_001
+DB | SQLite 操作失败或记录不存在 | TODO_E_DB_001
+PIOS | πOS API 调用失败或未配置 | TODO_E_PIOS_001
+AI | AI API 调用失败或解析错误 | TODO_E_AI_001
+SPEECH | Web Speech API 错误 | TODO_E_SPEECH_001
+ROUTE | 管线路由无匹配 | TODO_E_ROUTE_001
+RECO | 推荐分析限流或记录不存在 | TODO_E_RECO_001
+[/TABLE]
+
+
+[TABLE]
+Task.status | Task.pipelineStatus | 语义
+pending | null | 新任务，未关联管线
+pending | triggered | 已触发管线，等待执行
+pending | running | 管线执行中
+pending | failed | 管线执行失败，用户需处理
+completed | null | 用户手动完成，未触发管线
+completed | completed | 管线执行成功，自动或手动完成
+completed | running | 用户手动完成但管线仍在运行（允许）
+completed | failed | 用户手动完成但管线失败（允许）
+[/TABLE]

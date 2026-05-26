@@ -1,0 +1,1153 @@
+{
+  "meta": {
+    "project": "智能待办事项系统（Todo List + 语音 + 管线集成）",
+    "granularity": "module",
+    "granularity_reason": "19个功能点、5个UI面板，属中型项目，模块级粒度（25-35节点）最优；功能级过细导致协调开销，服务级过粗单Agent任务过重",
+    "generated_at": "2026-05-26",
+    "scope_note": "规划基准为 SRS 修订版（图表已升级至V3.0）+ PRD V3.0；TRS作为技术实现参考。AI大模型集成（decompose/route/analyze）明确排除（SRS §1.3.3 OUT OF SCOPE）。Task字段以SRS修订图表为准（title而非name，6字段）。SSE推送替代30s轮询（满足NFR-01，技术优化）。"
+  },
+  "contracts": [
+    {
+      "id": "contract.sqlite-schema",
+      "name": "SQLite Schema & db.js",
+      "description": "5张表DDL（tasks/pipeline_configs/pipeline_stats/app_config/recommendation_feedback）+ db.js初始化（WAL模式、busy_timeout=5000）",
+      "artifact": "backend/db.js + backend/migrations/init.sql",
+      "consumed_by": [
+        "L2-001",
+        "L2-002",
+        "L2-003",
+        "L2-004",
+        "L2-005"
+      ],
+      "produced_by": "L1-001",
+      "type": "schema"
+    },
+    {
+      "id": "contract.api-types",
+      "name": "REST API Contract + Type Definitions",
+      "description": "所有13个端点的请求/响应形态（JSDoc接口）；实体类型Task{id,title,status,pipeline_id,created_at,updated_at}、PipelineConfig、PipelineStat、RecommendationFeedback、AppConfig；错误信封格式",
+      "artifact": "shared/types.js + docs/api-contract.md",
+      "consumed_by": [
+        "L2-001",
+        "L2-002",
+        "L2-003",
+        "L2-004",
+        "L2-005",
+        "L2-006",
+        "L2-007",
+        "L2-008",
+        "L2-009",
+        "L2-010",
+        "L2-011"
+      ],
+      "produced_by": "L1-002",
+      "type": "types"
+    },
+    {
+      "id": "contract.mock-api",
+      "name": "Mock API Server",
+      "description": "Express mock服务器（port 3001），所有端点返回stub数据，前端可完全独立于真实后端开发",
+      "artifact": "backend/mock-server.js",
+      "consumed_by": [
+        "L2-006",
+        "L2-007",
+        "L2-008",
+        "L2-009",
+        "L2-010",
+        "L2-011"
+      ],
+      "produced_by": "L1-003",
+      "type": "mock"
+    },
+    {
+      "id": "contract.app-context",
+      "name": "AppContext Skeleton + Fetch Utilities",
+      "description": "React useReducer全局状态骨架（所有action类型定义、初始state形态）+ api.js fetch封装（错误处理、JSON解析）；reducer处理器空实现，前端组件可依赖接口开发",
+      "artifact": "frontend/src/context/AppContext.jsx + frontend/src/utils/api.js",
+      "consumed_by": [
+        "L2-006",
+        "L2-007",
+        "L2-008",
+        "L2-009",
+        "L2-010",
+        "L2-011"
+      ],
+      "produced_by": "L1-004",
+      "type": "context"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "L0-001",
+      "title": "仓库脚手架（Repo Scaffold）",
+      "layer": "L0",
+      "agent_role": "fullstack",
+      "complexity": "S",
+      "depends_on": [],
+      "consumes_contracts": [],
+      "produces": [
+        "backend/package.json",
+        "backend/.env.example",
+        "backend/app.js",
+        "frontend/package.json",
+        "frontend/vite.config.js",
+        "frontend/index.html",
+        ".gitignore",
+        "README.md"
+      ],
+      "files_owned": [
+        "backend/package.json",
+        "backend/.env.example",
+        "backend/app.js",
+        "frontend/package.json",
+        "frontend/vite.config.js",
+        "frontend/index.html",
+        ".gitignore",
+        "README.md"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "frontend: npm install && npm run dev 启动成功，浏览器访问 http://localhost:5173 无报错",
+        "backend: npm install && node app.js 启动成功，端口3001可访问",
+        ".env.example 包含所有环境变量占位符：PORT、FRONTEND_URL、PIOS_API_BASE_URL、PIOS_API_TOKEN",
+        ".gitignore 包含 .env、node_modules、dist、*.db",
+        "两个工程目录结构符合 TRS §2.3 前后端分层规范"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS CON-03 Node.js≥18"
+        ],
+        "trs": [
+          "TRS §2.3 前后端分层架构"
+        ]
+      },
+      "estimated_minutes": 30,
+      "rationale_for_layer": "仓库脚手架是所有后续工作的物理基础，必须串行先行",
+      "description": "初始化 monorepo 骨架：Node.js 20 + Express 4 后端（better-sqlite3、cors、dotenv）+ React 19 + Vite 8 前端脚手架；建立统一目录结构（backend/、frontend/、shared/、docs/）和 .env.example 配置模板。"
+    },
+    {
+      "id": "L1-001",
+      "title": "SQLite Schema & db.js 初始化器",
+      "layer": "L1",
+      "agent_role": "backend",
+      "complexity": "S",
+      "depends_on": [
+        "L0-001"
+      ],
+      "consumes_contracts": [],
+      "produces": [
+        "contract.sqlite-schema",
+        "backend/db.js",
+        "backend/migrations/init.sql"
+      ],
+      "files_owned": [
+        "backend/db.js",
+        "backend/migrations/init.sql"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "node backend/db.js 执行后生成 todo.db，包含5张表：tasks、pipeline_configs、pipeline_stats、app_config、recommendation_feedback",
+        "tasks表字段：id(PK AUTO INCREMENT)、title(NOT NULL TEXT)、status(DEFAULT 'pending')、pipeline_id(NULL TEXT)、created_at(DATETIME DEFAULT CURRENT_TIMESTAMP)、updated_at(DATETIME)",
+        "pipeline_configs表字段：id、pipeline_id(UNIQUE NOT NULL)、display_name、api_base_url、created_at",
+        "pipeline_stats表字段：id、pipeline_id(FK)、trigger_count(DEFAULT 0)、last_triggered_at",
+        "app_config表字段：key(PK)、value、updated_at",
+        "recommendation_feedback表字段：id、pipeline_id(FK)、useful(BOOLEAN)、created_at",
+        "PRAGMA journal_mode=WAL 已启用",
+        "db.pragma('busy_timeout = 5000') 已配置",
+        "db实例以module.exports导出，供所有service层直接引用"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §6.2 核心数据模型（修订版图8）",
+          "SRS §6.3 数据存储规划"
+        ],
+        "trs": [
+          "TRS §5.4 SQLite事务边界"
+        ]
+      },
+      "estimated_minutes": 45,
+      "rationale_for_layer": "db.js是所有后端服务的唯一数据库入口，必须在L2实现前固化，是后端并行的关键契约",
+      "description": "建立 5 张 SQLite 表的完整 DDL，完成 db.js 初始化（WAL 模式，busy_timeout=5000），为全部后端服务提供数据层契约。"
+    },
+    {
+      "id": "L1-002",
+      "title": "REST API 契约 + 类型定义",
+      "layer": "L1",
+      "agent_role": "fullstack",
+      "complexity": "M",
+      "depends_on": [
+        "L0-001"
+      ],
+      "consumes_contracts": [],
+      "produces": [
+        "contract.api-types",
+        "shared/types.js",
+        "docs/api-contract.md"
+      ],
+      "files_owned": [
+        "shared/types.js",
+        "docs/api-contract.md"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "types.js 导出 JSDoc @typedef：Task、PipelineConfig、PipelineStat、AppConfig、RecommendationFeedback",
+        "Task typedef字段：id(number)、title(string)、status('pending'|'completed')、pipeline_id(string|null)、created_at(number)、updated_at(number|null)",
+        "api-contract.md 列出全部13个端点（路径、HTTP方法、请求体、响应体示例、错误码）",
+        "错误信封格式统一：{error:{code:string,message:string}}",
+        "HTTP状态码规范：200/201/204/400/404/503",
+        "文档与SRS修订版图表数据模型一致（title不是name，6字段）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §8 接口需求",
+          "SRS修订版图5/图6 API路径"
+        ],
+        "trs": [
+          "TRS §6.1 接口风格约定"
+        ]
+      },
+      "estimated_minutes": 60,
+      "rationale_for_layer": "API契约是前后端解耦的唯一边界，决定全局并行度：所有L2后端和前端任务都以此为实现基准",
+      "description": "定义全部 13 个 REST 端点的请求/响应 Schema（JSDoc）；实体类型 Task（title 字段，6 字段）、PipelineConfig、AppConfig 等；错误信封格式——前后端共同遵守的类型契约。"
+    },
+    {
+      "id": "L1-003",
+      "title": "Mock API Server",
+      "layer": "L1",
+      "agent_role": "backend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.api-types"
+      ],
+      "produces": [
+        "contract.mock-api",
+        "backend/mock-server.js"
+      ],
+      "files_owned": [
+        "backend/mock-server.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "node backend/mock-server.js 在3001端口启动",
+        "覆盖全部13个端点，返回符合contract.api-types的stub数据",
+        "GET /api/tasks 返回至少3条示例任务（含pending/completed混合）",
+        "GET /api/pipeline-configs 返回至少2条示例管线配置",
+        "GET /api/pipeline/status-stream 返回SSE连接，每5s推送一次heartbeat",
+        "GET /api/recommendations 返回至少1条示例推荐",
+        "所有POST/PATCH/DELETE端点返回对应成功状态码和stub响应体",
+        "前端L2任务可直接对接此Mock Server完成完整UI开发"
+      ],
+      "context_refs": {
+        "trs": [
+          "TRS §6.3 核心接口契约"
+        ],
+        "other": [
+          "contract.api-types"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "Mock Server使所有前端L2任务完全独立于后端实现，是最大化L2并行度的关键",
+      "description": "启动 Express mock 服务器（port 3001），为全部 13 个端点返回 stub 数据（含 SSE 模拟），让 6 个前端 L2 任务在真实后端完成前可完全独立运行。"
+    },
+    {
+      "id": "L1-004",
+      "title": "AppContext Skeleton + Fetch Utilities",
+      "layer": "L1",
+      "agent_role": "frontend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.api-types"
+      ],
+      "produces": [
+        "contract.app-context",
+        "frontend/src/context/AppContext.jsx",
+        "frontend/src/utils/api.js"
+      ],
+      "files_owned": [
+        "frontend/src/context/AppContext.jsx",
+        "frontend/src/utils/api.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "AppContext导出useAppContext() hook，返回{state, dispatch}",
+        "state形态：{tasks:Task[], pipelineConfigs:PipelineConfig[], recommendations:RecommendationFeedback[], config:AppConfig, loading:boolean, error:string|null}",
+        "action类型全部定义并导出常量：INIT_TASKS、ADD_TASK、UPDATE_TASK、DELETE_TASK、SET_PIPELINE_CONFIGS、UPDATE_TASK_PIPELINE_STATUS、SET_RECOMMENDATIONS、SET_CONFIG、SET_LOADING、SET_ERROR",
+        "reducer空实现（直接return state），不影响组件挂载",
+        "api.js导出：fetchTasks()、createTask()、updateTask()、deleteTask()、fetchPipelineConfigs()、createPipelineConfig()、deletePipelineConfig()、triggerPipeline()、fetchRecommendations()、submitFeedback()、fetchConfig()、updateConfig()，均指向mock-server端口",
+        "所有fetch函数有统一错误处理（非200抛出含code的Error）"
+      ],
+      "context_refs": {
+        "trs": [
+          "TRS §2.5 原则五React Context"
+        ],
+        "other": [
+          "contract.api-types"
+        ]
+      },
+      "estimated_minutes": 60,
+      "rationale_for_layer": "AppContext骨架使所有前端组件可在空reducer下独立开发和渲染，无需等待完整状态逻辑",
+      "description": "建立 React AppContext（useReducer 全局状态骨架，含全部 action 类型定义和初始 state 形态）+ api.js fetch 封装（错误处理、JSON 解析）；reducer 处理器空实现，供全部前端 L2 任务消费。"
+    },
+    {
+      "id": "L2-001",
+      "title": "Task Service & Routes（后端）",
+      "layer": "L2",
+      "agent_role": "backend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-001",
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/routes/tasks.js",
+        "backend/controllers/taskController.js",
+        "backend/services/taskService.js"
+      ],
+      "files_owned": [
+        "backend/routes/tasks.js",
+        "backend/controllers/taskController.js",
+        "backend/services/taskService.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "GET /api/tasks → 200 + Task[]，按created_at DESC排序",
+        "POST /api/tasks body:{title(required),status?,pipeline_id?} → 201 + Task；title为空→400",
+        "PATCH /api/tasks/:id body可选字段{title,status,pipeline_id,updated_at} → 200 + Task；不存在→404",
+        "DELETE /api/tasks/:id → 204；不存在→404",
+        "taskService.create() 生成id=task_<Date.now()>_<uuid前8位>，服务端设置created_at",
+        "updatedAt在每次PATCH成功后由后端强制覆写",
+        "SQLite事务：批量操作使用db.transaction()包裹",
+        "curl测试：所有4个端点返回正确HTTP状态码和JSON"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-01/02/03/04/06",
+          "SRS修订版图8 tasks表结构"
+        ],
+        "trs": [
+          "TRS §6.3.1-6.3.4"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "纯实现L1已定义的契约，仅依赖db.js和api-types，与其他L2服务零耦合",
+      "description": "实现任务 CRUD 全链路：GET/POST /api/tasks + PATCH/DELETE /api/tasks/:id，含 title 校验（非空、200 字符上限）、completed 切换、inline 编辑保存、pipeline_id 关联字段。"
+    },
+    {
+      "id": "L2-002",
+      "title": "Pipeline Config Service & Routes（后端）",
+      "layer": "L2",
+      "agent_role": "backend",
+      "complexity": "S",
+      "depends_on": [
+        "L1-001",
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/routes/pipeline-configs.js",
+        "backend/controllers/pipelineConfigController.js",
+        "backend/services/pipelineConfigService.js"
+      ],
+      "files_owned": [
+        "backend/routes/pipeline-configs.js",
+        "backend/controllers/pipelineConfigController.js",
+        "backend/services/pipelineConfigService.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "GET /api/pipeline-configs → 200 + PipelineConfig[]",
+        "POST /api/pipeline-configs body:{pipeline_id(required),display_name,api_base_url} → 201 + PipelineConfig；pipeline_id重复→409",
+        "DELETE /api/pipeline-configs/:id → 204；不存在→404",
+        "pipeline_id字段UNIQUE约束在SQLite层强制（不依赖应用层去重）",
+        "curl测试：3个端点均正常"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-11",
+          "SRS修订版图8 pipeline_configs表"
+        ],
+        "trs": [
+          "TRS §6.3 接口设计"
+        ]
+      },
+      "estimated_minutes": 60,
+      "rationale_for_layer": "管线配置CRUD，纯SQLite操作，与其他服务零依赖",
+      "description": "实现管线配置 CRUD：GET/POST /api/pipeline-configs + DELETE /api/pipeline-configs/:id，操作 pipeline_configs 表；每次触发后向 pipeline_stats UPSERT 统计（trigger_count + last_triggered_at）。"
+    },
+    {
+      "id": "L2-003",
+      "title": "Pipeline Trigger & SSE Status Push（后端）",
+      "layer": "L2",
+      "agent_role": "backend",
+      "complexity": "L",
+      "depends_on": [
+        "L1-001",
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/routes/pipelines.js",
+        "backend/routes/sseStream.js",
+        "backend/controllers/pipelineController.js",
+        "backend/services/piosClient.js",
+        "backend/services/sseService.js"
+      ],
+      "files_owned": [
+        "backend/routes/pipelines.js",
+        "backend/routes/sseStream.js",
+        "backend/controllers/pipelineController.js",
+        "backend/services/piosClient.js",
+        "backend/services/sseService.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "POST /api/pipelines/:id/trigger body:{pipelineId} → 200 + {executionId}；PIOS_API_BASE_URL未配置→503",
+        "piosClient.js: Bearer Token从.env注入请求头；5xx重试2次+1s退避；401不重试",
+        "触发成功后写入pipeline_stats（trigger_count+1，last_triggered_at=NOW）",
+        "GET /api/pipeline/status-stream: 响应头Content-Type:text/event-stream + Cache-Control:no-cache + Connection:keep-alive",
+        "数据推送计时器：每5s轮询πOS状态，状态变更→立即推送SSE帧",
+        "心跳计时器：连续30s无数据帧→发送':heartbeat\\n\\n'",
+        "客户端断开→clearInterval清理两个计时器，调用res.end()",
+        "πOS状态别名映射：completed/success→completed，failed/error→failed，running→running",
+        "PIOS_API_BASE_URL未配置时，SSE连接保持但不发任何事件（静默模式）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-10/13/14/16"
+        ],
+        "trs": [
+          "TRS §4.3 BP-02 SSE推送",
+          "TRS §6.3.8-6.3.9"
+        ]
+      },
+      "estimated_minutes": 150,
+      "rationale_for_layer": "πOS代理+SSE推送，仅依赖db.js和api契约，无L2间依赖",
+      "description": "实现管线触发 POST /api/pipelines/:id/trigger + SSE 状态推送 GET /api/pipeline/status-stream；集成 piosClient（Bearer Token 代理）；SSE 连接池（heartbeat 30s + data push 5s），满足 NFR-01 P95 <=60s。"
+    },
+    {
+      "id": "L2-004",
+      "title": "Recommendation Service & Routes（后端）",
+      "layer": "L2",
+      "agent_role": "backend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-001",
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/routes/recommendations.js",
+        "backend/controllers/recommendationController.js",
+        "backend/services/recommendationService.js"
+      ],
+      "files_owned": [
+        "backend/routes/recommendations.js",
+        "backend/controllers/recommendationController.js",
+        "backend/services/recommendationService.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "GET /api/recommendations → 200 + 推荐列表（来自pipeline_stats：7天内trigger_count≥3且未被抑制）",
+        "推荐触发条件（三条件同时满足）：①7天内trigger_count≥3；②冷却期：last_recommended_at为NULL或距今>24h；③抑制期：不存在useful=FALSE且created_at在7天内的同pipeline_id反馈",
+        "同一时刻最多展示1张（按7天触发次数降序选最高）",
+        "POST /api/recommendations/feedback body:{pipeline_id,useful:boolean} → 201",
+        "useful=false时写入recommendation_feedback，7天内该pipeline_id不再推荐",
+        "GET /api/recommendations 更新last_recommended_at（展示时间戳）",
+        "SQL查询效率：有index on pipeline_stats.pipeline_id, recommendation_feedback.pipeline_id"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-16/17/18/19",
+          "SRS修订版图6主流程"
+        ],
+        "prd": [
+          "PRD §9.3 推荐触发规则"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "纯SQL统计推荐，无AI依赖，仅读写SQLite，与其他L2服务零耦合",
+      "description": "实现推荐服务：GET /api/recommendations（SQL 7 天内 trigger_count>=3，含 24h 冷却 + 7 天抑制期过滤）+ POST /api/recommendations/feedback（写 recommendation_feedback，计算 suppressUntil），满足 NFR-02 100% 精度。"
+    },
+    {
+      "id": "L2-005",
+      "title": "App Config Service & Routes（后端）",
+      "layer": "L2",
+      "agent_role": "backend",
+      "complexity": "S",
+      "depends_on": [
+        "L1-001",
+        "L1-002"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/routes/config.js",
+        "backend/controllers/configController.js",
+        "backend/services/configService.js"
+      ],
+      "files_owned": [
+        "backend/routes/config.js",
+        "backend/controllers/configController.js",
+        "backend/services/configService.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "GET /api/config → 200 + AppConfig对象（含所有app_config键值）",
+        "PATCH /api/config body:Partial<AppConfig> → 200 + 更新后配置",
+        "configService.updateConfig()使用db.transaction()逐键UPSERT app_config表",
+        "pios_api_token写入后不在响应体中回显（以hasPiosToken:boolean替代）",
+        "polling_enabled存储于app_config（FR-15全局轮询开关）",
+        "GET /api/config读取polling_enabled状态，供SSE服务判断是否启动轮询"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-11/15",
+          "SRS修订版图8 app_config表"
+        ],
+        "trs": [
+          "TRS §5.2 DL-05配置读写链路"
+        ]
+      },
+      "estimated_minutes": 60,
+      "rationale_for_layer": "全局配置键值存储，简单UPSERT，无复杂业务逻辑",
+      "description": "实现应用配置读写：GET/PATCH /api/config，操作 app_config 表（UPSERT）；pios Token 存储与脱敏（前端只见掩码，满足 NFR-07）；轮询全局开关持久化。"
+    },
+    {
+      "id": "L2-006",
+      "title": "TaskListPanel + TaskItem（前端 UI）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "L",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/components/TaskListPanel.jsx",
+        "frontend/src/components/TaskListPanel.module.css",
+        "frontend/src/components/TaskItem.jsx",
+        "frontend/src/components/TaskItem.module.css"
+      ],
+      "files_owned": [
+        "frontend/src/components/TaskListPanel.jsx",
+        "frontend/src/components/TaskListPanel.module.css",
+        "frontend/src/components/TaskItem.jsx",
+        "frontend/src/components/TaskItem.module.css"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "TaskListPanel渲染任务列表，三态筛选（全部/进行中/已完成）切换正确，筛选为前端内存操作不触发API",
+        "TaskItem：复选框切换status；双击进入内联编辑模式（input，自动全选文字）",
+        "内联编辑：回车/失焦+非空→dispatch UPDATE_TASK；Esc或空文本→恢复原值",
+        "删除：点击按钮→弹确认对话框（默认焦点在'取消'）→确认dispatch DELETE_TASK",
+        "TaskItem展示pipeline_id关联管线的pipelineStatus徽章（running/completed/failed对应颜色）",
+        "管线失败时显示红色'管线失败'警告标签（FR-14）",
+        "空状态：列表为空时显示引导文案（不出现空白区域）",
+        "加载状态：初始化时显示3个骨架占位条",
+        "aria-label：所有图标按钮有中文可读标签"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-02/03/04/05",
+          "SRS修订版图7状态机"
+        ],
+        "prd": [
+          "PRD §7.3 功能规格卡"
+        ]
+      },
+      "estimated_minutes": 150,
+      "rationale_for_layer": "纯前端UI，依赖mock-server和AppContext骨架，与其他前端L2组件零耦合（通过AppContext解耦）",
+      "description": "实现 TaskListPanel（过滤器三档 全部/进行中/已完成 + 列表四态：正常/空/加载/错误）和 TaskItem（完成复选框双向切换、双击内联编辑、删除确认弹窗、管线失败红色标签）。"
+    },
+    {
+      "id": "L2-007",
+      "title": "InputPanel + VoiceButton + PipelineTrigger Modal（前端）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "L",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/components/InputPanel.jsx",
+        "frontend/src/components/InputPanel.module.css",
+        "frontend/src/components/VoiceButton.jsx",
+        "frontend/src/components/VoiceButton.module.css",
+        "frontend/src/components/PipelineTriggerModal.jsx",
+        "frontend/src/components/PipelineTriggerModal.module.css",
+        "frontend/src/hooks/useSpeechRecognition.js"
+      ],
+      "files_owned": [
+        "frontend/src/components/InputPanel.jsx",
+        "frontend/src/components/InputPanel.module.css",
+        "frontend/src/components/VoiceButton.jsx",
+        "frontend/src/components/VoiceButton.module.css",
+        "frontend/src/components/PipelineTriggerModal.jsx",
+        "frontend/src/components/PipelineTriggerModal.module.css",
+        "frontend/src/hooks/useSpeechRecognition.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "InputPanel：输入框+添加按钮，回车/点击提交，空文本拦截（输入框抖动动效+焦点保持），成功后清空",
+        "VoiceButton：'window.SpeechRecognition||window.webkitSpeechRecognition'存在时渲染，否则DOM中不存在（FR-08 BR-08a）",
+        "长按触发recognition.start()，松开触发recognition.stop()",
+        "识别中：脉冲动效 + '正在识别...'文字标签（BR-08b）",
+        "识别成功：结果填入InputPanel输入框，不自动提交（BR-09a）",
+        "识别失败/空结果：不自动提交，显示错误提示2s（BR-08c）",
+        "首次请求麦克风权限时展示说明文案",
+        "PipelineTriggerModal：识别成功后可选弹出，展示pipeline_configs列表，选择后二次确认（默认焦点在'取消'），确认后dispatch triggerPipeline",
+        "触发成功后5s内显示撤回提示栏"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-08/09/10",
+          "SRS修订版图5语音时序图"
+        ],
+        "prd": [
+          "PRD §7.3 FR-08/09规格卡",
+          "PRD §8 信任设计"
+        ]
+      },
+      "estimated_minutes": 150,
+      "rationale_for_layer": "输入区全部组件，依赖mock-api返回pipeline_configs列表，无L2间组件依赖",
+      "description": "实现 InputPanel（输入框 + 添加按钮，空文本拦截）、VoiceButton（Web Speech API 长按录音，Firefox 桌面 DOM 不存在，识别结果填入输入框不自动提交）和 PipelineTriggerModal（管线列表 + 二次确认，默认焦点在取消）。"
+    },
+    {
+      "id": "L2-008",
+      "title": "usePipelineSSE Hook（前端）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/hooks/usePipelineSSE.js"
+      ],
+      "files_owned": [
+        "frontend/src/hooks/usePipelineSSE.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "组件挂载时创建new EventSource('/api/pipeline/status-stream')",
+        "onmessage解析data字段（JSON），dispatch UPDATE_TASK_PIPELINE_STATUS {taskId, pipelineStatus, updatedAt}",
+        "接收heartbeat帧时不dispatch（仅心跳维持连接，不更新状态）",
+        "onerror：指数退避重连（1s/2s/4s，最大30s），console.warn记录重连次数",
+        "组件卸载时eventSource.close()（无内存泄漏）",
+        "AppContext reducer接收UPDATE_TASK_PIPELINE_STATUS时，比较payload.updatedAt与store中现有updatedAt：payload较旧则丢弃（防乱序覆盖）",
+        "PIOS未配置时SSE保持连接但无事件，Hook静默等待（不显示错误）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS NFR-01"
+        ],
+        "trs": [
+          "TRS §5.2 DL-03 SSE链路",
+          "TRS §4.3.2 SSE异常分支"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "纯Hook，无UI渲染，依赖mock-server的SSE端点和AppContext dispatch，完全独立",
+      "description": "实现 usePipelineSSE hook：EventSource 订阅 /api/pipeline/status-stream，指数退避断线重连，将 pipeline 状态变更（completed/failed）dispatch 到 AppContext，满足 NFR-01 P95 <=60s。"
+    },
+    {
+      "id": "L2-009",
+      "title": "ConfigPanel（前端）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/components/ConfigPanel.jsx",
+        "frontend/src/components/ConfigPanel.module.css"
+      ],
+      "files_owned": [
+        "frontend/src/components/ConfigPanel.jsx",
+        "frontend/src/components/ConfigPanel.module.css"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "管线配置区：展示pipeline_configs列表，支持添加（填写Pipeline ID+显示名称+API baseURL）和删除",
+        "Token说明：显示'πOS Token由运维配置于后端.env，无需在此页面填写'提示文案（CON-06）",
+        "hasPiosToken:true时显示'已配置'状态标识；false时显示'未配置'（不回显明文Token）",
+        "全局轮询开关（FR-15）：toggle按钮，dispatch updateConfig({polling_enabled:bool})",
+        "保存成功后Toast提示，失败时错误提示",
+        "管线列表变化后AppContext中pipeline_configs同步更新（触发管线选择列表刷新）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-11/15",
+          "SRS CON-06 Token安全"
+        ],
+        "prd": [
+          "PRD §7.3 配置页规格"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "配置面板组件，依赖mock-api的pipeline-configs和config端点",
+      "description": "实现 ConfigPanel：管线配置增删（baseURL 输入 + pipeline_id），pios Token 安全说明（存后端 .env，前端仅显示掩码），轮询全局开关（P1），满足 NFR-07 Token 不出现在前端。"
+    },
+    {
+      "id": "L2-010",
+      "title": "RecommendationPanel（前端）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/components/RecommendationPanel.jsx",
+        "frontend/src/components/RecommendationPanel.module.css"
+      ],
+      "files_owned": [
+        "frontend/src/components/RecommendationPanel.jsx",
+        "frontend/src/components/RecommendationPanel.module.css"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "侧边栏展示推荐卡片：管线名称、触发次数、推荐原因",
+        "最多展示1张推荐卡（同时满足条件时按触发次数降序取最高）",
+        "采纳按钮：dispatch submitFeedback({pipeline_id, useful:true})，卡片消失",
+        "忽略按钮：dispatch submitFeedback({pipeline_id, useful:false})，7天内不再出现（suppressUntil由后端设置）",
+        "无推荐时显示'数据积累中，暂无推荐'（FR-19）",
+        "初次渲染时fetchRecommendations()加载数据",
+        "条件满足（7天≥3次）时卡片自动出现（轮询GET /api/recommendations 每60s或页面加载时）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-17/18/19"
+        ],
+        "prd": [
+          "PRD §9.3 推荐触发规则"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "独立侧边栏组件，依赖mock-api的recommendations端点",
+      "description": "实现 RecommendationPanel：侧边栏推荐卡展示（GET /api/recommendations），采纳/忽略反馈按钮（POST /api/recommendations/feedback），数据积累中空态提示，同时最多 1 张卡。"
+    },
+    {
+      "id": "L2-011",
+      "title": "App Shell & 全局 UX（前端）",
+      "layer": "L2",
+      "agent_role": "frontend",
+      "complexity": "M",
+      "depends_on": [
+        "L1-003",
+        "L1-004"
+      ],
+      "consumes_contracts": [
+        "contract.mock-api",
+        "contract.app-context"
+      ],
+      "produces": [
+        "frontend/src/App.jsx",
+        "frontend/src/App.module.css",
+        "frontend/src/components/Toast.jsx",
+        "frontend/src/components/Toast.module.css",
+        "frontend/src/components/ErrorBanner.jsx",
+        "frontend/src/components/ErrorBanner.module.css",
+        "frontend/src/index.css"
+      ],
+      "files_owned": [
+        "frontend/src/App.jsx",
+        "frontend/src/App.module.css",
+        "frontend/src/components/Toast.jsx",
+        "frontend/src/components/Toast.module.css",
+        "frontend/src/components/ErrorBanner.jsx",
+        "frontend/src/components/ErrorBanner.module.css",
+        "frontend/src/index.css"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "App.jsx整体布局：输入区（顶部）+ 任务列表（中部）+ 推荐侧边栏（第二期条件渲染）+ 配置面板（第二期条件渲染）",
+        "响应式CSS：视口≤768px→单列布局；>768px→主列+侧边栏布局（FR-07）",
+        "375px宽度无横向溢出，输入框全宽，语音按钮可见（PRD UX-01/02）",
+        "ErrorBanner：非阻断轻提示横幅，3s自动消失或手动关闭（后端不可用时显示'服务暂时不可用，请稍后重试'）",
+        "Toast：成功/错误操作反馈，200ms内产生视觉响应（PRD UX-07）",
+        "骨架屏：初始化GET /api/tasks期间显示3个占位任务条（PRD §7.6 加载态）",
+        "所有图标按钮有中文aria-label（PRD UX-05）",
+        "Tab键可完成完整增删改查流程（PRD UX-04）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS FR-07/NFR-11"
+        ],
+        "prd": [
+          "PRD §7.6 主页面四态规格",
+          "PRD UX-01~07"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "App壳层和全局UX组件，不承载业务逻辑，纯UI职责",
+      "description": "实现 App.jsx 整体布局（768px 响应式断点）、全局 Toast 通知系统、错误 Banner、加载骨架屏；满足移动端适配（375px 无溢出、按钮 >=44x44px）和 NFR-11 后端异常友好提示不白屏。"
+    },
+    {
+      "id": "L3-001",
+      "title": "后端服务集成测试",
+      "layer": "L3",
+      "agent_role": "backend",
+      "complexity": "M",
+      "depends_on": [
+        "L2-001",
+        "L2-002",
+        "L2-003",
+        "L2-004",
+        "L2-005"
+      ],
+      "consumes_contracts": [
+        "contract.sqlite-schema",
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/tests/integration/tasks.test.js",
+        "backend/tests/integration/pipelines.test.js",
+        "backend/tests/integration/recommendations.test.js"
+      ],
+      "files_owned": [
+        "backend/tests/integration/"
+      ],
+      "shared_files_touched": [
+        "backend/app.js"
+      ],
+      "acceptance_criteria": [
+        "backend/app.js注册所有路由（tasks/pipeline-configs/pipelines/sseStream/recommendations/config）",
+        "node backend/app.js 启动无报错，所有路由可访问",
+        "集成测试（curl或supertest）：Task CRUD完整链路；pipeline_configs CRUD；GET /api/config → PATCH → GET验证持久化",
+        "SSE端点：curl -N http://localhost:3001/api/pipeline/status-stream 建立连接并收到heartbeat",
+        "所有路由错误（400/404/503）返回正确格式的错误信封",
+        "todo.db文件在backend/目录生成且包含正确表结构"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §9 验收标准"
+        ],
+        "trs": [
+          "TRS §2.3 后端四层结构"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "集成测试将所有后端路由连接到同一Express实例，是L4验收和L3-002前端对接的前提",
+      "description": "将 5 个后端 Route 模块挂载到 app.js；运行集成测试（真实 SQLite in-memory 数据库），覆盖 CRUD 全链路、CORS 配置、400/404/500 错误响应、pipeline_stats UPSERT。"
+    },
+    {
+      "id": "L3-002",
+      "title": "前后端 API 对接（替换 Mock）",
+      "layer": "L3",
+      "agent_role": "fullstack",
+      "complexity": "M",
+      "depends_on": [
+        "L3-001",
+        "L2-006",
+        "L2-007",
+        "L2-008",
+        "L2-009",
+        "L2-010",
+        "L2-011"
+      ],
+      "consumes_contracts": [
+        "contract.api-types"
+      ],
+      "produces": [
+        "frontend/src/utils/api.js（更新）",
+        "frontend/src/context/AppContext.jsx（更新）"
+      ],
+      "files_owned": [],
+      "shared_files_touched": [
+        "frontend/src/utils/api.js",
+        "frontend/src/context/AppContext.jsx"
+      ],
+      "acceptance_criteria": [
+        "api.js所有fetch函数BASE_URL切换为真实后端（从.env.local读取VITE_API_URL）",
+        "AppContext reducer完整实现所有action处理器（INIT_TASKS/ADD_TASK/UPDATE_TASK/DELETE_TASK/SET_PIPELINE_CONFIGS/UPDATE_TASK_PIPELINE_STATUS等）",
+        "浏览器访问前端：任务列表从后端SQLite加载；CRUD操作持久化（刷新后数据保留）",
+        "SRS DoD D-01~D-12 第一期验收项全部手工验证通过",
+        "usePipelineSSE连接真实后端SSE端点（有πOS配置时收到状态推送）"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §9.1 第一期验收"
+        ],
+        "prd": [
+          "PRD §5.5 第一期DoD"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "真实接口替换mock，前后端在此层联调验证，是关键路径串行节点",
+      "description": "将前端 api.js 的 mock base URL 切换为真实后端，补全 AppContext reducer 处理器与真实 API 响应格式的对接；联调主页面全链路（添加/完成/删除/筛选任务），验证第一期 DoD D-01~D-12。"
+    },
+    {
+      "id": "L3-003",
+      "title": "管线状态 SSE 端到端联调",
+      "layer": "L3",
+      "agent_role": "fullstack",
+      "complexity": "M",
+      "depends_on": [
+        "L3-002"
+      ],
+      "consumes_contracts": [
+        "contract.api-types"
+      ],
+      "produces": [
+        "backend/tests/e2e/pipeline-sse.test.js"
+      ],
+      "files_owned": [
+        "backend/tests/e2e/pipeline-sse.test.js"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "配置PIOS_API_BASE_URL（指向测试πOS端点或Mock πOS）",
+        "触发管线→SSE推送pipelineStatus=running→TaskItem状态徽章更新为'运行中'",
+        "πOS返回completed→SSE推送→TaskItem自动标记已完成（≤10s内，满足NFR-01）",
+        "πOS返回failed→SSE推送→TaskItem显示红色'管线失败'标签",
+        "用户手动取消勾选后（已完成→进行中），后续SSE推送旧状态不会反向覆盖（updatedAt比较机制）",
+        "关闭πOS配置（PIOS_API_BASE_URL置空）→SSE维持连接但无事件→无错误提示"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS NFR-01 ≤60s",
+          "SRS FR-13/14/15"
+        ],
+        "trs": [
+          "TRS §4.3.3 并发控制"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "SSE端到端是第二期核心链路，需前后端集成后才能验证",
+      "description": "联调 SSE 管线状态推送全链路：触发 -> pios 代理（或 mock stub）-> SSE 广播 -> 前端 usePipelineSSE -> 任务状态更新；验证 NFR-01 P95 延迟 <=60s，脚本采样 20 次。"
+    },
+    {
+      "id": "L4-001",
+      "title": "测试套件（后端单测 + 前端组件测）",
+      "layer": "L4",
+      "agent_role": "fullstack",
+      "complexity": "M",
+      "depends_on": [
+        "L3-002"
+      ],
+      "consumes_contracts": [],
+      "produces": [
+        "backend/tests/unit/taskService.test.js",
+        "backend/tests/unit/recommendationService.test.js",
+        "frontend/src/tests/TaskItem.test.jsx",
+        "frontend/src/tests/VoiceButton.test.jsx"
+      ],
+      "files_owned": [
+        "backend/tests/unit/taskService.test.js",
+        "backend/tests/unit/recommendationService.test.js",
+        "frontend/src/tests/TaskItem.test.jsx",
+        "frontend/src/tests/VoiceButton.test.jsx"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "taskService单测：create/update/delete/getAll各有≥2个用例，覆盖正常路径和边界（空title/不存在id）",
+        "recommendationService单测：推荐触发条件三条件验证；suppressUntil超时恢复；7天触发次数计算",
+        "TaskItem组件测：双击→编辑模式；Esc→恢复；空文本不保存",
+        "VoiceButton组件测：Firefox桌面不渲染；非Firefox时渲染",
+        "npm test 全部通过，无skipped用例"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §9 验收标准"
+        ],
+        "trs": [
+          "TRS §2.5 原则一单向依赖便于单测"
+        ]
+      },
+      "estimated_minutes": 120,
+      "rationale_for_layer": "单测验证代码正确性，并行于其他L4任务",
+      "description": "后端单元测试（jest + supertest：taskService / recommendationService / configService）；前端组件测试（vitest + @testing-library/react：TaskItem 内联编辑、VoiceButton Firefox 隐藏、PipelineTriggerModal 焦点行为）。"
+    },
+    {
+      "id": "L4-002",
+      "title": "NFR 验证 & 安全检查",
+      "layer": "L4",
+      "agent_role": "fullstack",
+      "complexity": "M",
+      "depends_on": [
+        "L3-002"
+      ],
+      "consumes_contracts": [],
+      "produces": [
+        "docs/nfr-validation-report.md"
+      ],
+      "files_owned": [
+        "docs/nfr-validation-report.md"
+      ],
+      "shared_files_touched": [],
+      "acceptance_criteria": [
+        "NFR-01：测试脚本触发管线状态变更，记录SSE推送到达时间，P95≤60s（20次样本）",
+        "NFR-03：Chrome DevTools DOMContentLoaded≤3s（生产构建，有线网络，disable cache）",
+        "NFR-04：添加10条任务→F5刷新→GET /api/tasks→条数和内容与页面展示一致",
+        "NFR-07：DevTools Network面板：所有前端→后端请求中无Authorization头；后端响应体无token明文",
+        "NFR-08：Firefox桌面打开→语音按钮DOM不存在（document.querySelector('button[aria-label*=\"录音\"]')为null）",
+        "NFR-10：Chrome≥90/Edge≥90/Safari≥14各浏览器核心操作路径无控制台报错",
+        "NFR-11：停止后端进程→前端显示ErrorBanner，不白屏",
+        "XSS检查：输入<script>alert(1)</script>作为任务标题，确认DOM中以textContent渲染，不执行JS",
+        "结果写入docs/nfr-validation-report.md"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS §7 非功能需求"
+        ],
+        "prd": [
+          "PRD §10.3 安全与数据保护"
+        ]
+      },
+      "estimated_minutes": 90,
+      "rationale_for_layer": "NFR验证并行于测试套件和文档，最终门控",
+      "description": "逐项验证 NFR-01~12：SQLite WAL 写入可靠性、pios Token 不泄露（DevTools Network 抓包）、Firefox 语音按钮 DOM 不存在、500 条任务渲染 <=500ms、移动端 375px 无溢出、5 步内本地启动。产出验证报告。"
+    },
+    {
+      "id": "L4-003",
+      "title": "README & 部署文档",
+      "layer": "L4",
+      "agent_role": "fullstack",
+      "complexity": "S",
+      "depends_on": [
+        "L3-002"
+      ],
+      "consumes_contracts": [],
+      "produces": [
+        "docs/deployment.md"
+      ],
+      "files_owned": [
+        "docs/deployment.md"
+      ],
+      "shared_files_touched": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "README.md：5步内完成本地启动（git clone→npm install backend→npm install frontend→配置.env→npm start + npm run dev）",
+        "README包含：系统架构简图、环境要求（Node.js≥18、浏览器版本）、.env变量说明",
+        "docs/deployment.md：HTTPS部署方案（Nginx反向代理+SSL，满足iOS Safari Web Speech API要求）",
+        "部署文档包含：πOS Token配置步骤、CORS FRONTEND_URL环境变量设置方法、SQLite备份建议",
+        "SRS NFR-12：5步内完成本地启动验证通过"
+      ],
+      "context_refs": {
+        "srs": [
+          "SRS NFR-12",
+          "SRS AS-01 HTTPS部署假设"
+        ],
+        "prd": [
+          "PRD §12.1 上线方式"
+        ]
+      },
+      "estimated_minutes": 45,
+      "rationale_for_layer": "文档工作并行于测试，无代码依赖",
+      "description": "撰写并完善 README（5 步内本地启动，满足 NFR-12）和 docs/deployment.md（环境变量说明、.env.example 字段、pios Token 配置方法）；同步更新 README 中的项目指标。"
+    }
+  ],
+  "metrics": {
+    "total_tasks": 22,
+    "parallel_batches": 6,
+    "critical_path_length": 6,
+    "critical_path": [
+      "L0-001",
+      "L1-001",
+      "L2-001",
+      "L3-001",
+      "L3-002",
+      "L3-003"
+    ],
+    "theoretical_parallelism": 3.67,
+    "l2_ratio": 0.5,
+    "max_batch_width": 7,
+    "layer_counts": {
+      "L0": 1,
+      "L1": 4,
+      "L2": 11,
+      "L3": 3,
+      "L4": 3
+    }
+  },
+  "_parallel_batches_preview": [
+    [
+      "L0-001"
+    ],
+    [
+      "L1-001",
+      "L1-002"
+    ],
+    [
+      "L1-003",
+      "L1-004",
+      "L2-001",
+      "L2-002",
+      "L2-003",
+      "L2-004",
+      "L2-005"
+    ],
+    [
+      "L2-006",
+      "L2-007",
+      "L2-008",
+      "L2-009",
+      "L2-010",
+      "L2-011",
+      "L3-001"
+    ],
+    [
+      "L3-002"
+    ],
+    [
+      "L3-003",
+      "L4-001",
+      "L4-002",
+      "L4-003"
+    ]
+  ],
+  "project": {
+    "name": "智能待办事项系统",
+    "summary": "React 19 + Node.js 20 + SQLite 全栈应用：Todo List + 语音录入 + πOS 管线集成。P0 第一期含任务 CRUD / 语音录入 / SSE 管线状态推送；P1 第二期含推荐面板 / 配置管理。",
+    "granularity": "module",
+    "granularity_rationale": "19个功能点、5个UI面板，属中型项目，模块级粒度（25-35节点）最优；功能级过细导致协调开销，服务级过粗单Agent任务过重"
+  }
+}

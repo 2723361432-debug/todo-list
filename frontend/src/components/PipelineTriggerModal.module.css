@@ -1,0 +1,277 @@
+/* ── Overlay ───────────────────────────────────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  /* Slight fade-in */
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Modal box ─────────────────────────────────────────────────────────── */
+.modal {
+  background: #ffffff;
+  width: 400px;
+  max-width: 90vw;
+  border-radius: 12px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 10px 30px -5px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.18s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.closeIcon {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  color: #888;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.closeIcon:hover {
+  color: #333;
+  background: #f5f5f5;
+}
+
+/* ── Body ──────────────────────────────────────────────────────────────── */
+.body {
+  padding: 16px 20px;
+  flex: 1;
+}
+
+/* Status / error messages */
+.statusMsg {
+  margin: 0;
+  color: #666;
+  font-size: 14px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+.errorMsg {
+  margin: 0;
+  color: #d9534f;
+  font-size: 14px;
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* ── Pipeline list ─────────────────────────────────────────────────────── */
+.pipelineList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Scrollbar styling */
+.pipelineList::-webkit-scrollbar {
+  width: 6px;
+}
+.pipelineList::-webkit-scrollbar-track {
+  background: #f5f5f5;
+  border-radius: 3px;
+}
+.pipelineList::-webkit-scrollbar-thumb {
+  background: #d0d0d0;
+  border-radius: 3px;
+}
+.pipelineList::-webkit-scrollbar-thumb:hover {
+  background: #aaa;
+}
+
+.pipelineItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1.5px solid #e8e8e8;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  outline: none;
+}
+
+.pipelineItem:hover {
+  border-color: #4a90e2;
+  background: #f0f6ff;
+}
+
+.pipelineItem:focus-visible {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.25);
+}
+
+.pipelineItemSelected {
+  border-color: #4a90e2;
+  background: #eef4ff;
+}
+
+.radioIndicator {
+  flex-shrink: 0;
+  font-size: 16px;
+  color: #4a90e2;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.pipelineLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a1a1a;
+  line-height: 1.4;
+}
+
+.pipelineDesc {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #888;
+  line-height: 1.4;
+  /* Description sits below label when present */
+  flex-basis: 100%;
+}
+
+/* ── Confirmation box ──────────────────────────────────────────────────── */
+.confirmBox {
+  background: #fff8e6;
+  border: 1px solid #ffd666;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.confirmText {
+  margin: 0;
+  font-size: 14px;
+  color: #594300;
+  line-height: 1.6;
+}
+
+.confirmText strong {
+  color: #1a1a1a;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+.btnSecondary,
+.btnPrimary {
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  border: 1.5px solid transparent;
+  line-height: 1.4;
+}
+
+.btnSecondary {
+  background: #ffffff;
+  color: #555;
+  border-color: #d0d0d0;
+}
+
+.btnSecondary:hover:not(:disabled) {
+  background: #f5f5f5;
+  border-color: #bbb;
+}
+
+.btnSecondary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.12);
+}
+
+.btnPrimary {
+  background: #4a90e2;
+  color: #ffffff;
+  border-color: #4a90e2;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: #357abd;
+  border-color: #357abd;
+}
+
+.btnPrimary:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.35);
+}
+
+.btnSecondary:disabled,
+.btnPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .modal {
+    width: 90vw;
+    border-radius: 10px;
+  }
+
+  .header {
+    padding: 14px 16px 10px;
+  }
+
+  .body {
+    padding: 14px 16px;
+  }
+
+  .footer {
+    padding: 10px 16px 14px;
+  }
+
+  .pipelineList {
+    max-height: 220px;
+  }
+}
