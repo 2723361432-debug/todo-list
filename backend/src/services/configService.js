@@ -68,10 +68,11 @@ export async function updateConfig(patch) {
 
 export async function getSafeConfig() {
   const config = await getConfig();
-  const { aiApiKey, piosApiToken, ...safe } = config;
+  // Destructure all known sensitive key variants (camelCase + snake_case stored in DB)
+  const { aiApiKey, piosApiToken, pios_token, ...safe } = config;
   return {
     ...safe,
     hasApiKey: Boolean(aiApiKey),
-    hasPiosToken: Boolean(piosApiToken),
+    hasPiosToken: Boolean(piosApiToken) || Boolean(pios_token),
   };
 }
