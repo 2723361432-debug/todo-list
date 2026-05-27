@@ -3,7 +3,12 @@ import { updateTask, deleteTask } from '../services/api'
 import { useAppDispatch, useToast } from '../context/AppContext'
 import styles from './TaskItem.module.css'
 
-const PRIORITY_COLORS = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' }
+const PRIORITY_COLORS = {
+  high: '#ef4444',
+  medium: '#f59e0b',
+  low: '#3b82f6',
+}
+
 const PIPELINE_STATUS_LABEL = {
   triggered: '流水线进行中',
   completed: '已完成',
@@ -15,11 +20,14 @@ export function TaskItem({ task }) {
   const toast = useToast()
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState(task.name)
+  const [showMenu, setShowMenu] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const inputRef = useRef(null)
 
+  const isDone = task.status === 'done' || task.status === 'completed'
+
   const handleToggle = async () => {
-    const newStatus = task.status === 'done' ? 'pending' : 'done'
+    const newStatus = isDone ? 'pending' : 'done'
     try {
       const updated = await updateTask(task.id, { status: newStatus })
       dispatch({ type: 'UPDATE_TASK', payload: updated })
@@ -63,23 +71,33 @@ export function TaskItem({ task }) {
 
   const priorityColor = PRIORITY_COLORS[task.priority] || '#94a3b8'
 
+  const timeDisplay = task.timeLabel
+    || (task.dueAt ? new Date(task.dueAt * 1000).toLocaleDateString('zh-CN') : null)
+
   return (
-    <div className={`${styles.item} ${task.status === 'done' ? styles.done : ''}`}>
+    <div className={`${styles.item} ${isDone ? styles.done : ''}`}>
+      {/* Circle checkbox */}
+      <button
+        className={`${styles.circleCheckbox} ${isDone ? styles.circleChecked : ''}`}
+        onClick={handleToggle}
+        aria-label={isDone ? '标记未完成' : '标记完成'}
+        title={isDone ? '标记未完成' : '标记完成'}
+      >
+        {isDone && (
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+            <path d="M2 5l2.5 2.5L8 3" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+      </button>
+
+      {/* Priority dot */}
       <span
         className={styles.priorityDot}
         style={{ background: priorityColor }}
         title={task.priority}
       />
 
-      <label className={styles.checkboxWrapper}>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={task.status === 'done' || task.status === 'completed'}
-          onChange={handleToggle}
-        />
-      </label>
-
+      {/* Task name */}
       <div className={styles.content}>
         {editing ? (
           <input
@@ -100,53 +118,69 @@ export function TaskItem({ task }) {
           </span>
         )}
 
-        <div className={styles.meta}>
-          {task.category && <span className={styles.category}>{task.category}</span>}
-          {task.timeLabel && <span className={styles.timeLabel}>{task.timeLabel}</span>}
-          {task.dueAt && (
-            <span className={styles.dueAt}>
-              {new Date(task.dueAt * 1000).toLocaleDateString('zh-CN')}
-            </span>
-          )}
-          {task.completedSource === 'pipeline' && (
-            <span className={styles.badgePipeline}>流水线</span>
-          )}
-          {task.pipelineStatus && task.pipelineStatus !== 'completed' && (
-            <span className={`${styles.pipelineStatus} ${styles[task.pipelineStatus]}`}>
-              {PIPELINE_STATUS_LABEL[task.pipelineStatus] || task.pipelineStatus}
-            </span>
-          )}
-        </div>
+        {/* Sub-badges: pipeline status, category */}
+        {(task.pipelineStatus && task.pipelineStatus !== 'completed') && (
+          <span className={`${styles.badge} ${styles[task.pipelineStatus]}`}>
+            {PIPELINE_STATUS_LABEL[task.pipelineStatus] || task.pipelineStatus}
+          </span>
+        )}
+        {task.completedSource === 'pipeline' && (
+          <span className={`${styles.badge} ${styles.badgePipeline}`}>流水线</span>
+        )}
       </div>
 
-      {confirmDelete ? (
-        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
-          <span style={{ fontSize: '0.75rem', color: '#64748b', whiteSpace: 'nowrap' }}>确认删除？</span>
-          <button
-            onClick={handleDelete}
-            aria-label="确认删除"
-            style={{ minHeight: '44px', padding: '4px 12px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
-          >
-            确认
-          </button>
-          <button
-            onClick={() => setConfirmDelete(false)}
-            aria-label="取消删除"
-            style={{ minHeight: '44px', padding: '4px 12px', background: '#6c757d', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
-          >
-            取消
-          </button>
-        </span>
-      ) : (
-        <button
-          className={styles.deleteBtn}
-          onClick={() => setConfirmDelete(true)}
-          aria-label="删除"
-          title="删除"
-        >
-          ×
-        </button>
+      {/* Time label */}
+      {timeDisplay && (
+        <span className={styles.timeLabel}>{timeDisplay}</span>
       )}
+
+      {/* "..." overflow menu */}
+      <div className={styles.menuWrapper}>
+        {confirmDelete ? (
+          <span className={styles.confirmRow}>
+            <button
+              className={styles.confirmBtn}
+              onClick={handleDelete}
+              aria-label="确认删除"
+            >
+              删除
+            </button>
+            <button
+              className={styles.cancelBtn}
+              onClick={() => { setConfirmDelete(false); setShowMenu(false) }}
+              aria-label="取消"
+            >
+              取消
+            </button>
+          </span>
+        ) : (
+          <>
+            <button
+              className={styles.moreBtn}
+              onClick={() => setShowMenu(v => !v)}
+              aria-label="更多操作"
+            >
+              •••
+            </button>
+            {showMenu && (
+              <div className={styles.dropdown}>
+                <button
+                  className={styles.dropdownItem}
+                  onClick={() => { setConfirmDelete(true) }}
+                >
+                  🗑 删除
+                </button>
+                <button
+                  className={styles.dropdownItem}
+                  onClick={() => { handleDoubleClick(); setShowMenu(false) }}
+                >
+                  ✏️ 编辑
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

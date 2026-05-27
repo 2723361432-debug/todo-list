@@ -1,80 +1,225 @@
 .panel {
-  background: #fff;
+  flex: 1;
+  background: var(--bg-card);
   border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  overflow: hidden;
-}
-
-.filterBar {
-  display: flex;
-  gap: 0.25rem;
-  padding: 0.75rem 0.75rem 0;
-  border-bottom: 1px solid #f1f5f9;
-  overflow-x: auto;
-}
-
-.filterBtn {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 8px 16px;
-  min-height: 44px;
-  min-width: 44px;
-  border: none;
-  border-radius: 6px 6px 0 0;
-  background: transparent;
-  color: #64748b;
-  font-size: 0.85rem;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.15s;
-}
-
-.filterBtn:hover { color: #1e293b; }
-
-.filterBtn.active {
-  background: #eff6ff;
-  color: #2563eb;
-  font-weight: 500;
-}
-
-.count {
-  background: #e2e8f0;
-  border-radius: 10px;
-  padding: 0.05rem 0.4rem;
-  font-size: 0.72rem;
-  color: #475569;
-}
-
-.filterBtn.active .count {
-  background: #bfdbfe;
-  color: #1d4ed8;
-}
-
-.list {
-  list-style: none;
-  padding: 0.5rem 0.75rem 0.75rem;
-  margin: 0;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  overflow: hidden;
+  min-height: 0;
 }
 
-.loading, .empty {
-  padding: 2.5rem;
-  text-align: center;
-  color: #94a3b8;
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 20px 0;
+  flex-shrink: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.addTaskBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.addTaskBtn:hover {
+  opacity: 0.88;
+}
+
+/* Tab bar */
+.tabBar {
+  display: flex;
+  gap: 0;
+  padding: 12px 20px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.tabCount {
+  font-size: 0.7rem;
+  background: #e2e8f0;
+  color: var(--text-secondary);
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-weight: 600;
+}
+
+.tabCountActive {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* Add task area */
+.addTaskArea {
+  padding: 12px 16px;
+  background: #fafbff;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.inputRow > :first-child {
+  flex: 1;
+}
+
+/* Task list */
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Loading */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 3rem;
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
-@media (max-width: 640px) {
-  .filterBar {
-    gap: 0;
-    padding: 0.5rem 0.5rem 0;
-  }
-  .filterBtn {
-    padding: 8px 10px;
-    min-height: 44px;
-    font-size: 0.8rem;
-  }
+.loadingSpinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #e2e8f0;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Empty state */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3.5rem 2rem;
+  gap: 12px;
+  flex: 1;
+}
+
+.emptyIcon {
+  font-size: 2.5rem;
+  opacity: 0.5;
+}
+
+.emptyText {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Inline add task button at bottom */
+.inlineAddBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-top: 1px solid #f1f5f9;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  transition: color 0.15s, background 0.15s;
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.inlineAddBtn:hover {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.inlineAddIcon {
+  width: 18px;
+  height: 18px;
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.inlineAddText {
+  font-size: 0.875rem;
 }

@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { AppProvider, useAppDispatch, useToast } from './context/AppContext'
-import { InputPanel } from './components/InputPanel'
+import { AppProvider, useAppState, useAppDispatch, useToast } from './context/AppContext'
+import { Sidebar } from './components/Sidebar'
 import { TaskListPanel } from './components/TaskListPanel'
-import { RecommendationPanel } from './components/RecommendationPanel'
+import { CalendarWidget } from './components/CalendarWidget'
 import { ConfigPanel } from './components/ConfigPanel'
 import { Toast } from './components/Toast'
-import VoiceButton from './components/VoiceButton'
 import PipelineTriggerModal from './components/PipelineTriggerModal'
 import { usePipelineSSE } from './hooks/usePipelineSSE'
 import styles from './App.module.css'
@@ -13,14 +12,15 @@ import styles from './App.module.css'
 function AppInner() {
   const dispatch = useAppDispatch()
   const toast = useToast()
+  const { tasks } = useAppState()
   const [showConfig, setShowConfig] = useState(false)
-  const [voiceText, setVoiceText] = useState('')
   const [showPipelineModal, setShowPipelineModal] = useState(false)
   const [pendingTaskId, setPendingTaskId] = useState(null)
+  const [activeView, setActiveView] = useState('inbox')
 
   usePipelineSSE()
 
-  // Called by InputPanel after a task is successfully created
+  // Called by TaskListPanel after a task is successfully created
   const handleTaskCreated = (task) => {
     if (task?.id) {
       setPendingTaskId(task.id)
@@ -28,32 +28,33 @@ function AppInner() {
     }
   }
 
+  // Compute task counts for sidebar badges
+  const taskCounts = {
+    inbox: tasks.filter(t => t.status !== 'done').length,
+    today: 0,
+    tomorrow: 0,
+    week: 0,
+  }
+
   return (
     <div className={styles.app}>
-      <header className={styles.header}>
-        <h1 className={styles.logo}>智能待办</h1>
-        <button
-          className={styles.settingsBtn}
-          onClick={() => setShowConfig(true)}
-          aria-label="设置"
-        >
-          ⚙️
-        </button>
-      </header>
+      {/* Left: Sidebar (icon strip + menu) */}
+      <Sidebar
+        activeView={activeView}
+        onViewChange={setActiveView}
+        taskCounts={taskCounts}
+        onSettings={() => setShowConfig(true)}
+      />
 
+      {/* Center: Main content */}
       <main className={styles.main}>
-        <RecommendationPanel />
-        <div className={styles.inputArea}>
-          <InputPanel
-            onVoiceResult={(t) => setVoiceText(t)}
-            voiceText={voiceText}
-            onTaskCreated={handleTaskCreated}
-          />
-          <VoiceButton onResult={(t) => setVoiceText(t)} />
-        </div>
-        <TaskListPanel />
+        <TaskListPanel onTaskCreated={handleTaskCreated} />
       </main>
 
+      {/* Right: Calendar */}
+      <CalendarWidget tasks={tasks} />
+
+      {/* Modals & overlays */}
       {showPipelineModal && pendingTaskId && (
         <PipelineTriggerModal
           taskId={pendingTaskId}
